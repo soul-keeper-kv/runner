@@ -2,7 +2,10 @@ import type {
   AuthProfileStorePort,
   AuthProfileView,
   ExecutionProfile,
+  ProfileHeader,
   SaveAuthProfileInput,
+  TokenPlacement,
+  TokenSource,
 } from '@runner/application';
 import {
   RunnerErrors,
@@ -90,6 +93,23 @@ export class PostgresAuthProfileStore implements AuthProfileStorePort {
     const validated = validate(input);
     if (!validated.ok) return validated;
 
+    /*
+     * Placement and source travel together, as one column.
+     *
+     * Undefined rather than an empty object when neither is given, so a
+     * FORM_LOGIN profile does not carry an empty token configuration that a
+     * later reader could mistake for a configured one.
+     */
+    const tokenConfig: TokenConfigRow | undefined =
+      input.tokenPlacements === undefined && input.tokenSource === undefined
+        ? undefined
+        : {
+            ...(input.tokenPlacements === undefined
+              ? {}
+              : { placements: input.tokenPlacements }),
+            ...(input.tokenSource === undefined ? {} : { source: input.tokenSource }),
+          };
+
     // Sealed before the transaction opens: a key problem must not leave a
     // half-written profile behind.
     const sealed: { key: string; ciphertext: string; iv: string; tag: string }[] = [];
@@ -122,7 +142,8 @@ export class PostgresAuthProfileStore implements AuthProfileStorePort {
 
         const [profile] = await tx<{ id: string }[]>`
           INSERT INTO execution_profiles
-            (workspace_ref, profile_ref, display_name, strategy, login_url, form_fields, updated_at)
+            (workspace_ref, profile_ref, display_name, strategy, login_url, form_fields,
+             token_config, extra_headers, updated_at)
           VALUES (
             ${input.workspaceRef},
             ${input.ref},
@@ -130,14 +151,18 @@ export class PostgresAuthProfileStore implements AuthProfileStorePort {
             ${input.strategy},
             ${input.loginUrl ?? null},
             ${tx.json(input.formFields as Record<string, string>)},
+            ${tokenConfig === undefined ? null : tx.json(tokenConfig as never)},
+            ${tx.json((input.extraHeaders ?? []) as never)},
             ${this.clock.nowIso()}
           )
           ON CONFLICT (workspace_ref, profile_ref) DO UPDATE SET
             display_name = EXCLUDED.display_name,
             strategy     = EXCLUDED.strategy,
-            login_url    = EXCLUDED.login_url,
-            form_fields  = EXCLUDED.form_fields,
-            updated_at   = EXCLUDED.updated_at
+            login_url     = EXCLUDED.login_url,
+            form_fields   = EXCLUDED.form_fields,
+            token_config  = EXCLUDED.token_config,
+            extra_headers = EXCLUDED.extra_headers,
+            updated_at    = EXCLUDED.updated_at
           RETURNING id
         `;
 
@@ -301,6 +326,16 @@ export class PostgresAuthProfileStore implements AuthProfileStorePort {
         secretRefs,
         ...(view.loginUrl === undefined ? {} : { loginUrl: view.loginUrl }),
         formFields: view.formFields,
+        // Without these a stored API_TOKEN profile reaches the worker with no
+        // placement and is refused as unconfigured — a baffling way to fail for
+        // a profile the user filled in completely.
+        ...(view.tokenPlacements === undefined
+          ? {}
+          : { tokenPlacements: view.tokenPlacements }),
+        ...(view.tokenSource === undefined ? {} : { tokenSource: view.tokenSource }),
+        ...(view.extraHeaders === undefined || view.extraHeaders.length === 0
+          ? {}
+          : { extraHeaders: view.extraHeaders }),
       },
       secrets,
     });
@@ -341,10 +376,24 @@ interface ProfileRow {
   readonly strategy: ExecutionProfile['strategy'];
   readonly login_url: string | null;
   readonly form_fields: Record<string, string>;
+  readonly token_config: TokenConfigRow | null;
+  readonly extra_headers: ProfileHeader[];
   readonly secret_keys: string[];
   readonly secret_refs: Record<string, string>;
   readonly created_at: string;
   readonly updated_at: string;
+}
+
+/**
+ * How token configuration is stored.
+ *
+ * One JSONB column holds both halves, because they are meaningless apart: a
+ * placement with no source has nothing to place, and a source with no placement
+ * has nowhere to put what it fetched.
+ */
+interface TokenConfigRow {
+  readonly placements?: readonly TokenPlacement[];
+  readonly source?: TokenSource;
 }
 
 interface SecretRow {
@@ -365,6 +414,16 @@ function toView(row: ProfileRow): AuthProfileView {
     formFields: row.form_fields,
     secretsPresent: row.secret_keys,
     secretRefs: row.secret_refs,
+    // Safe to read back: a placement names a storage key, a cookie or a
+    // header, and a token source names the secret holding the token rather
+    // than the token itself.
+    ...(row.token_config?.placements === undefined
+      ? {}
+      : { tokenPlacements: row.token_config.placements }),
+    ...(row.token_config?.source === undefined
+      ? {}
+      : { tokenSource: row.token_config.source }),
+    extraHeaders: row.extra_headers ?? [],
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -396,6 +455,31 @@ function validate(input: SaveAuthProfileInput): Result<void> {
       return err(
         RunnerErrors.validationFailed(
           'A FORM_LOGIN profile must name its form fields, e.g. {"username":"Email","password":"Password","submit":"Log in"}.',
+          { profileRef: input.ref },
+        ),
+      );
+    }
+  }
+
+  if (input.strategy === 'API_TOKEN') {
+    /*
+     * Both halves are required, for the same reason FORM_LOGIN needs a URL and
+     * fields: a profile stored half-configured fails much later, as a
+     * precondition failure on someone else's run, and the message there cannot
+     * say what the author forgot.
+     */
+    if (input.tokenSource === undefined) {
+      return err(
+        RunnerErrors.validationFailed(
+          'An API_TOKEN profile needs a tokenSource: a stored token, or a login endpoint to exchange credentials at.',
+          { profileRef: input.ref },
+        ),
+      );
+    }
+    if (input.tokenPlacements === undefined || input.tokenPlacements.length === 0) {
+      return err(
+        RunnerErrors.validationFailed(
+          'An API_TOKEN profile needs at least one tokenPlacement, saying where the token goes: a storage key, a cookie, or a request header.',
           { profileRef: input.ref },
         ),
       );

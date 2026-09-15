@@ -272,3 +272,157 @@ describe('reading and deleting', () => {
     expect(deleted.error.code).toBe('REGISTRY_ENTITY_NOT_FOUND');
   });
 });
+
+/**
+ * Token configuration round-tripping.
+ *
+ * The failure these prevent is silent and expensive: a user fills in a token
+ * profile completely, the store drops the part it does not know about, and the
+ * worker later refuses the profile as "unconfigured". The message at that point
+ * cannot say what was lost.
+ */
+describe('token configuration', () => {
+  function tokenProfile(ref: string, overrides: Record<string, unknown> = {}) {
+    return {
+      ref,
+      workspaceRef: WORKSPACE,
+      displayName: 'CARIS token',
+      strategy: 'API_TOKEN' as const,
+      loginUrl: 'https://app.test/login/',
+      formFields: {},
+      tokenSource: { kind: 'static' as const, secretRef: 'token' },
+      tokenPlacements: [{ kind: 'header' as const }],
+      ...overrides,
+    };
+  }
+
+  it('round-trips placements and the token source', async () => {
+    if (!available) return;
+
+    const saved = await store.save(
+      tokenProfile('T_ROUND', {
+        tokenPlacements: [
+          { kind: 'header', name: 'X-Auth', prefix: '' },
+          {
+            kind: 'localStorage',
+            key: 'auth-storage',
+            jsonTemplate: '{"state":{"token":"{{token}}"},"version":0}',
+            origin: 'https://app.test',
+          },
+        ],
+        tokenSource: {
+          kind: 'apiLogin',
+          url: 'https://app.test/api/auth/login',
+          bodyTemplate: '{"username":"{{U}}","password":"{{P}}"}',
+          tokenPath: 'data.access_token',
+        },
+      }),
+    );
+
+    expect(saved.ok).toBe(true);
+    if (!saved.ok) return;
+    expect(saved.value.tokenPlacements).toHaveLength(2);
+    expect(saved.value.tokenPlacements?.[1]).toMatchObject({
+      kind: 'localStorage',
+      key: 'auth-storage',
+    });
+    expect(saved.value.tokenSource).toMatchObject({
+      kind: 'apiLogin',
+      tokenPath: 'data.access_token',
+    });
+  });
+
+  it('hands the configuration to the worker, not just to a reader', async () => {
+    if (!available) return;
+    await store.save(
+      tokenProfile('T_RESOLVE', { secrets: { token: 'a-bearer-token-value' } }),
+    );
+
+    const resolved = await store.resolveForExecution(WORKSPACE, 'T_RESOLVE');
+
+    expect(resolved.ok).toBe(true);
+    if (!resolved.ok) return;
+    // Without this the worker sees no placement and refuses the profile.
+    expect(resolved.value.profile.tokenPlacements).toEqual([{ kind: 'header' }]);
+    expect(resolved.value.profile.tokenSource).toMatchObject({ kind: 'static' });
+    expect(resolved.value.secrets.token).toBe('a-bearer-token-value');
+  });
+
+  it('round-trips free-form headers, including one naming a secret', async () => {
+    if (!available) return;
+
+    const saved = await store.save(
+      tokenProfile('T_HEADERS', {
+        extraHeaders: [
+          { name: 'X-Tenant', value: 'acme' },
+          { name: 'X-Api-Key', secretRef: 'apiKey' },
+        ],
+      }),
+    );
+
+    if (!saved.ok) return;
+    expect(saved.value.extraHeaders).toEqual([
+      { name: 'X-Tenant', value: 'acme' },
+      { name: 'X-Api-Key', secretRef: 'apiKey' },
+    ]);
+  });
+
+  it('stores no credential in the token configuration itself', async () => {
+    if (!available) return;
+    await store.save(
+      tokenProfile('T_NOLEAK', {
+        tokenSource: {
+          kind: 'apiLogin',
+          url: 'https://app.test/api/auth/login',
+          bodyTemplate: '{"password":"{{P}}"}',
+          tokenPath: 'token',
+        },
+        secrets: { P: PASSWORD },
+      }),
+    );
+
+    const rows = await sql<{ token_config: unknown; extra_headers: unknown }[]>`
+      SELECT token_config, extra_headers FROM execution_profiles
+      WHERE workspace_ref = ${WORKSPACE} AND profile_ref = 'T_NOLEAK'
+    `;
+
+    // The template holds a placeholder, never the value it stands for.
+    expect(JSON.stringify(rows[0])).not.toContain(PASSWORD);
+    expect(JSON.stringify(rows[0])).toContain('{{P}}');
+  });
+
+  it('leaves a FORM_LOGIN profile with no token configuration at all', async () => {
+    if (!available) return;
+    // An empty object here would read as "configured" to a later reader.
+    await store.save(formLogin('T_FORMONLY'));
+
+    const got = await store.get(WORKSPACE, 'T_FORMONLY');
+    if (!got.ok) return;
+    expect(got.value.tokenPlacements).toBeUndefined();
+    expect(got.value.tokenSource).toBeUndefined();
+  });
+
+  it('refuses an API_TOKEN profile that says where no token comes from', async () => {
+    if (!available) return;
+    const saved = await store.save(
+      tokenProfile('T_NOSOURCE', { tokenSource: undefined }) as never,
+    );
+
+    expect(saved.ok).toBe(false);
+    if (saved.ok) return;
+    expect(saved.error.code).toBe('VALIDATION_FAILED');
+    expect(saved.error.message).toContain('tokenSource');
+  });
+
+  it('refuses an API_TOKEN profile that names no placement', async () => {
+    if (!available) return;
+    // Storing this would fail much later, on someone else's run, as a
+    // precondition failure whose message cannot say what the author forgot.
+    const saved = await store.save(tokenProfile('T_NOPLACE', { tokenPlacements: [] }));
+
+    expect(saved.ok).toBe(false);
+    if (saved.ok) return;
+    expect(saved.error.code).toBe('VALIDATION_FAILED');
+    expect(saved.error.message).toContain('tokenPlacement');
+  });
+});
