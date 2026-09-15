@@ -43,6 +43,13 @@ export class CapabilitiesController {
       // LIVE_COMMAND_UNSUPPORTED naming the command, which `liveCommands` in
       // this document enumerates.
       liveSessionsAvailable: this.container.liveCommands !== undefined,
+      // Managing profiles over the API needs a database *and* an encryption
+      // key, and deliberately has no fallback — so this tracks whether the
+      // store was actually bound. `auth.profiles` stays AVAILABLE either way:
+      // the Runner can always authenticate from a profile declared in the
+      // worker's environment, which is a different claim from "you may store
+      // a credential here".
+      managedAuthProfilesAvailable: this.container.authProfileStore !== undefined,
     });
   }
 }

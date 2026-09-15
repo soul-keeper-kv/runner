@@ -60,6 +60,8 @@ export interface BuildCapabilitiesInput {
   readonly liveSessionsAvailable?: boolean;
   readonly registryAvailable?: boolean;
   readonly recorderAvailable?: boolean;
+  /** Needs both a database and an encryption key; neither has a fallback. */
+  readonly managedAuthProfilesAvailable?: boolean;
 }
 
 export function buildCapabilities(input: BuildCapabilitiesInput): RunnerCapabilities {
@@ -70,6 +72,7 @@ export function buildCapabilities(input: BuildCapabilitiesInput): RunnerCapabili
     liveSessionsAvailable = false,
     registryAvailable = false,
     recorderAvailable = false,
+    managedAuthProfilesAvailable = false,
   } = input;
 
   return {
@@ -153,6 +156,12 @@ export function buildCapabilities(input: BuildCapabilitiesInput): RunnerCapabili
         status: 'AVAILABLE',
         description:
           'Reach a page behind a login by naming an execution profile. A form login is replayed once and the session it produced is reused, for executions, inspections and live sessions alike. Credentials are referenced, never inlined.',
+      },
+      {
+        name: 'auth.profiles.managed',
+        status: managedAuthProfilesAvailable ? 'AVAILABLE' : 'DISABLED',
+        description:
+          'Create and edit auth profiles over the API, with credentials sealed under a key held in the Runner environment. Disabled without a database and an encryption key, in which case profiles are declared in the worker environment instead.',
       },
       {
         name: 'registry.self-healing',

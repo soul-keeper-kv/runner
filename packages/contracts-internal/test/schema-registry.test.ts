@@ -264,6 +264,9 @@ describe('capabilities', () => {
       'registry.self-healing',
       'resolver.semantic-ai',
       'recorder.interactive',
+      // Needs a database *and* an encryption key, and has no fallback: a
+      // deployment missing either must not be told it can store credentials.
+      'auth.profiles.managed',
     ];
 
     for (const name of optional) {
@@ -271,6 +274,23 @@ describe('capabilities', () => {
       expect(feature, `${name} should be described`).toBeDefined();
       expect(feature?.status, `${name} must not default to AVAILABLE`).not.toBe('AVAILABLE');
     }
+  });
+
+  it('reports managed auth profiles as available only when both halves exist', () => {
+    /*
+     * The distinction a caller needs: `auth.profiles` is always available —
+     * the Runner can always authenticate from a profile declared in the
+     * worker's environment. `auth.profiles.managed` is about whether profiles
+     * can be *edited over the API*, which needs a database and a key to seal
+     * credentials with. Conflating them would tell a client it can store a
+     * password when the route answers 501.
+     */
+    const off = buildCapabilities({ version: '0.1.0' });
+    expect(off.features.find((f) => f.name === 'auth.profiles')?.status).toBe('AVAILABLE');
+    expect(off.features.find((f) => f.name === 'auth.profiles.managed')?.status).toBe('DISABLED');
+
+    const on = buildCapabilities({ version: '0.1.0', managedAuthProfilesAvailable: true });
+    expect(on.features.find((f) => f.name === 'auth.profiles.managed')?.status).toBe('AVAILABLE');
   });
 
   it('reports registry and live sessions as available only when switched on', () => {
