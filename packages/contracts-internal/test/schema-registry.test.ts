@@ -200,6 +200,37 @@ describe('live command schema', () => {
     expect(registry.validate(SCHEMA_IDS.liveCommand, command).ok).toBe(false);
   });
 
+  it('accepts an auth.login naming a profile', () => {
+    const command = {
+      id: 'c1',
+      sessionId: 's1',
+      type: 'auth.login',
+      payload: { profileRef: 'MANAGER' },
+    };
+    expect(registry.validate(SCHEMA_IDS.liveCommand, command).ok).toBe(true);
+  });
+
+  it('requires a profileRef on auth.login', () => {
+    const command = { id: 'c1', sessionId: 's1', type: 'auth.login', payload: {} };
+    expect(registry.validate(SCHEMA_IDS.liveCommand, command).ok).toBe(false);
+  });
+
+  it('rejects a credential in an auth.login payload', () => {
+    /*
+     * The rule this protects (blueprint section 50): a live command names a
+     * profile, never a secret. This command arrives over a WebSocket from a
+     * browser tab, so a payload carrying a password would put it in a client,
+     * in a socket frame, and in every log between the two.
+     */
+    const command = {
+      id: 'c1',
+      sessionId: 's1',
+      type: 'auth.login',
+      payload: { profileRef: 'MANAGER', password: 'sup3r-s3cret' },
+    };
+    expect(registry.validate(SCHEMA_IDS.liveCommand, command).ok).toBe(false);
+  });
+
   it('rejects a highlight that names nothing to highlight', () => {
     const command = { id: 'c1', sessionId: 's1', type: 'element.highlight', payload: {} };
     expect(registry.validate(SCHEMA_IDS.liveCommand, command).ok).toBe(false);

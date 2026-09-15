@@ -45,6 +45,11 @@ export const LIVE_COMMAND_TYPES = [
   'session.pause',
   'session.resume',
 
+  // authentication
+  'auth.login',
+  'auth.status',
+  'auth.logout',
+
   // state
   'state.snapshot',
   'state.inspect',
@@ -66,6 +71,7 @@ export type LiveCapabilityType =
   | 'execution'
   | 'recording'
   | 'state'
+  | 'auth'
   | 'debug';
 
 const CAPABILITY_BY_NAMESPACE: Readonly<Record<string, LiveCapabilityType>> = {
@@ -77,6 +83,7 @@ const CAPABILITY_BY_NAMESPACE: Readonly<Record<string, LiveCapabilityType>> = {
   session: 'execution',
   state: 'state',
   recording: 'recording',
+  auth: 'auth',
   debug: 'debug',
 };
 
@@ -177,6 +184,41 @@ export interface StateSnapshotPayload {
 }
 
 /**
+ * Authenticates the live browser as a Runner-owned execution profile.
+ *
+ * The payload names a *profile*, never a credential. That is the same rule Test
+ * IR follows (blueprint section 50), and it matters more here than anywhere
+ * else: this command arrives over a WebSocket from a browser tab, so accepting
+ * a username and password would put credentials in a client, in a socket frame
+ * and in whatever logs sit between the two.
+ *
+ * `force` replays the login even when a stored session exists — how a user
+ * recovers after the application invalidated the session under them, which
+ * otherwise looks like an inexplicable "logged out" page in the live view.
+ */
+export interface AuthLoginPayload {
+  readonly profileRef: string;
+  readonly force?: boolean;
+}
+
+/**
+ * What the session believes about its own authentication.
+ *
+ * `authenticatedAs` is reported from what the Runner actually did — a restored
+ * session or a completed login — never inferred from page content. Concluding
+ * "there is a Sign out link, so we are logged in" is how a whole suite runs
+ * against a login page.
+ */
+export interface AuthStatusResult {
+  readonly authenticatedAs?: string;
+  /** True when a stored session exists for the profile and was applied. */
+  readonly fromStoredSession: boolean;
+  readonly profileRef?: string;
+  readonly capturedAt?: string;
+  readonly expiresAt?: string;
+}
+
+/**
  * One interaction the user performed, reported by the client.
  *
  * Recording is client-driven on purpose. Injecting listeners into the page to
@@ -239,8 +281,15 @@ export interface LiveCommandPayloadMap {
   'session.pause': Record<string, never>;
   'session.resume': Record<string, never>;
 
+  'auth.login': AuthLoginPayload;
+  'auth.status': Record<string, never>;
+  'auth.logout': Record<string, never>;
+
   'state.snapshot': StateSnapshotPayload;
-  'state.inspect': Record<string, never>;
+  // The same payload as `state.snapshot`, with the defaults inverted: inspect
+  // returns candidates and no frame unless asked otherwise. One shape, because
+  // the two commands run one code path and must not disagree about the page.
+  'state.inspect': StateSnapshotPayload;
 
   'recording.start': RecordingStartPayload;
   'recording.observe': RecordingObservePayload;

@@ -149,6 +149,12 @@ export function buildCapabilities(input: BuildCapabilitiesInput): RunnerCapabili
         description: 'Hold a browser open for live preview, element picking and selector editing.',
       },
       {
+        name: 'auth.profiles',
+        status: 'AVAILABLE',
+        description:
+          'Reach a page behind a login by naming an execution profile. A form login is replayed once and the session it produced is reused, for executions, inspections and live sessions alike. Credentials are referenced, never inlined.',
+      },
+      {
         name: 'registry.self-healing',
         status: selfHealingAvailable ? 'AVAILABLE' : 'PLANNED',
         description: 'Propose a replacement selector when a stored one stops matching.',

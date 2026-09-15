@@ -29,6 +29,22 @@ export interface LiveSession {
   readonly currentStepId?: string;
   readonly selectedElementId?: string;
 
+  /**
+   * The execution profile this session authenticates as, when it was started
+   * from one.
+   *
+   * Held on the session rather than passed per command because the browser is
+   * acquired lazily on the first command: by then the request that named the
+   * profile is long gone, and a session that forgot it would open
+   * unauthenticated and land on a login page.
+   *
+   * A profile *reference*, never a credential — those stay in the worker's
+   * secret provider (blueprint section 50).
+   */
+  readonly authProfileRef?: string;
+  /** Set once the Runner has actually authenticated, never inferred from the page. */
+  readonly authenticatedAs?: string;
+
   /** Incremented on every applied command, so clients can detect lost updates. */
   readonly revision: number;
 

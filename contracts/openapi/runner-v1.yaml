@@ -685,6 +685,18 @@ paths:
               properties:
                 workspaceRef: { type: string }
                 executionId: { type: string }
+                authProfileRef:
+                  type: string
+                  description: |
+                    Opens the session already authenticated as this
+                    Runner-owned execution profile, so the live view can reach a
+                    page that only exists behind a login. Credentials are
+                    referenced, never inlined: the worker resolves the profile
+                    against its own secret provider.
+
+                    When a stored session exists for the profile it is applied
+                    at launch. When none does, the session opens
+                    unauthenticated and `auth.login` performs the login.
                 ttlSeconds: { type: integer, minimum: 60, maximum: 7200 }
       responses:
         '201':
@@ -1293,6 +1305,15 @@ components:
           enum: [IDLE, RUNNING, PAUSED, WAITING_USER, FAILED, CLOSED]
         currentStepId: { type: string }
         selectedElementId: { type: string }
+        authProfileRef:
+          type: string
+          description: The execution profile this session authenticates as, when started from one.
+        authenticatedAs:
+          type: string
+          description: |
+            The profile the session is actually authenticated as. Set only from
+            what the Runner did — a restored session or a completed login —
+            never inferred from page content.
         revision:
           type: integer
           description: Incremented on every applied command, so clients can detect lost updates.

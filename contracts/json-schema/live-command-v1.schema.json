@@ -37,6 +37,9 @@
         "step.insert-after",
         "session.pause",
         "session.resume",
+        "auth.login",
+        "auth.status",
+        "auth.logout",
         "state.snapshot",
         "state.inspect",
         "recording.start",
@@ -245,6 +248,26 @@
                 "oneOf": [{ "type": "string" }, { "type": "number" }, { "type": "boolean" }]
               },
               "at": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "type": { "const": "auth.login" } }, "required": ["type"] },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "description": "Authenticates the live browser as a Runner-owned execution profile. It names a profile and nothing else: accepting a username or password here would carry a credential in a client, in a socket frame, and in every log between them.",
+            "required": ["profileRef"],
+            "additionalProperties": false,
+            "properties": {
+              "profileRef": { "type": "string", "minLength": 1 },
+              "force": {
+                "type": "boolean",
+                "description": "Replays the login even when a stored session exists, for recovering after the application invalidated the session."
+              }
             }
           }
         }
