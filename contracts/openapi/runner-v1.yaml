@@ -36,6 +36,16 @@ tags:
     description: Read Runner-owned element knowledge. Optional for integration.
   - name: Live Sessions
     description: Hold a browser open for live authoring, preview and picking.
+  - name: Auth Profiles
+    description: |
+      Manage the profiles that let the Runner reach a page behind a login.
+
+      A credential goes in and never comes back out: reads report which fields
+      are set, never their values. Stored values are sealed with AES-256-GCM
+      under a key held in the Runner's environment, so a database dump alone
+      reveals nothing. A deployment with no key configured answers `501` here
+      rather than storing a password it cannot protect — profiles are then
+      declared in the worker's own environment instead.
 
 paths:
   /health:
@@ -668,6 +678,133 @@ paths:
         '400':
           $ref: '#/components/responses/Error'
 
+  /api/v1/auth/profiles:
+    get:
+      tags: [Auth Profiles]
+      summary: List auth profiles
+      description: |
+        Returns every profile in the workspace, including which credentials are
+        set — by field name only. No stored credential value is ever returned.
+      parameters:
+        - $ref: '#/components/parameters/WorkspaceRefQuery'
+      responses:
+        '200':
+          description: The workspace's auth profiles.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  profiles:
+                    type: array
+                    items: { $ref: '#/components/schemas/AuthProfile' }
+        '400':
+          $ref: '#/components/responses/Error'
+        '501':
+          description: |
+            This deployment does not manage profiles: it has no database, or no
+            encryption key to seal credentials with.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error: { $ref: '#/components/schemas/RunnerError' }
+
+  /api/v1/auth/profiles/{profileRef}:
+    get:
+      tags: [Auth Profiles]
+      summary: Get an auth profile
+      parameters:
+        - $ref: '#/components/parameters/ProfileRef'
+        - $ref: '#/components/parameters/WorkspaceRefQuery'
+      responses:
+        '200':
+          description: The profile.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuthProfile' }
+        '404':
+          $ref: '#/components/responses/Error'
+    put:
+      tags: [Auth Profiles]
+      summary: Create or replace an auth profile
+      description: |
+        `PUT` because the caller names the resource: a profile ref is chosen by
+        a user and is what Test IR and a live session reference, so the same
+        request must be safe to repeat.
+
+        Credentials are supplied in `secrets`, keyed by form field. A field left
+        out keeps whatever value it already had — so editing a login URL cannot
+        log a suite out — and an empty string removes one. Values are sealed
+        before storage and are never returned.
+      parameters:
+        - $ref: '#/components/parameters/ProfileRef'
+        - $ref: '#/components/parameters/WorkspaceRefQuery'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [strategy]
+              properties:
+                displayName: { type: string }
+                strategy:
+                  type: string
+                  enum: [FORM_LOGIN, API_TOKEN, COOKIE, STORAGE_STATE, OAUTH, SSO]
+                  description: |
+                    Only FORM_LOGIN and STORAGE_STATE are implemented. Another
+                    value is stored and reports CAPABILITY_NOT_IMPLEMENTED when
+                    a login is attempted, rather than appearing to work.
+                loginUrl:
+                  type: string
+                  description: Required for FORM_LOGIN.
+                formFields:
+                  type: object
+                  additionalProperties: { type: string }
+                  description: |
+                    Credential field name to the *accessible name* of the element
+                    that holds it, e.g. `{"username":"USERNAME *","submit":"Log in"}`.
+                    Names, never selectors: the login form is resolved by the
+                    same locator engine as every other target, so a UI change
+                    does not invalidate the profile.
+                secretRefs:
+                  type: object
+                  additionalProperties: { type: string }
+                  description: |
+                    Environment-variable names for credentials kept outside the
+                    Runner. Preferred over a stored value when both are present,
+                    so a profile can move to a vault without being recreated.
+                secrets:
+                  type: object
+                  additionalProperties: { type: string }
+                  description: |
+                    Credential values to seal, by field name. Write-only: no
+                    response ever contains one.
+      responses:
+        '200':
+          description: The saved profile.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuthProfile' }
+        '400':
+          $ref: '#/components/responses/Error'
+        '501':
+          $ref: '#/components/responses/Error'
+    delete:
+      tags: [Auth Profiles]
+      summary: Delete an auth profile
+      description: Removes the profile and every credential sealed for it.
+      parameters:
+        - $ref: '#/components/parameters/ProfileRef'
+        - $ref: '#/components/parameters/WorkspaceRefQuery'
+      responses:
+        '204':
+          description: The profile was deleted.
+        '404':
+          $ref: '#/components/responses/Error'
+
   /api/v1/live-sessions:
     post:
       tags: [Live Sessions]
@@ -751,6 +888,12 @@ components:
       in: path
       required: true
       schema: { type: string }
+    ProfileRef:
+      name: profileRef
+      in: path
+      required: true
+      description: The profile's own name, as Test IR and a live session reference it.
+      schema: { type: string, minLength: 1 }
     WorkspaceRefQuery:
       name: workspaceRef
       in: query
@@ -1291,6 +1434,38 @@ components:
         queuedAt: { type: string, format: date-time }
         startedAt: { type: string, format: date-time }
         completedAt: { type: string, format: date-time }
+
+    AuthProfile:
+      type: object
+      description: |
+        A profile as the Runner reports it — everything except the credential
+        values. `secretsPresent` is what makes this safe to read: a client can
+        render "password: set" without the value existing outside the worker
+        that performs the login.
+      required: [ref, workspaceRef, displayName, strategy, formFields, secretsPresent, secretRefs]
+      properties:
+        ref: { type: string }
+        workspaceRef: { type: string }
+        displayName: { type: string }
+        strategy:
+          type: string
+          enum: [FORM_LOGIN, API_TOKEN, COOKIE, STORAGE_STATE, OAUTH, SSO]
+        loginUrl: { type: string }
+        formFields:
+          type: object
+          additionalProperties: { type: string }
+          description: Credential field name to the accessible name of its element.
+        secretsPresent:
+          type: array
+          items: { type: string }
+          description: |
+            Field names whose credential is stored, sealed. Never the values.
+        secretRefs:
+          type: object
+          additionalProperties: { type: string }
+          description: Field names resolved from an environment variable instead.
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
 
     LiveSession:
       type: object

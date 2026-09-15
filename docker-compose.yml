@@ -20,6 +20,10 @@ x-app-env: &app-env
   DATABASE_URL: postgresql://runner:runner@postgres:5432/runner
   REDIS_URL: redis://redis:6379
   RUNNER_LOG_LEVEL: ${RUNNER_LOG_LEVEL:-info}
+  # Seals credentials stored through /api/v1/auth/profiles. Both processes need
+  # it: the API to write them, the worker to read them back for a login. Absent,
+  # those routes answer 501 rather than keeping a password readable.
+  RUNNER_SECRET_KEY: ${RUNNER_SECRET_KEY:-}
   # `loadConfig` refuses to start in production without both URLs above, rather
   # than silently falling back to in-memory storage. That refusal is wanted here.
   NODE_ENV: production
