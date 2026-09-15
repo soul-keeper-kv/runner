@@ -27,10 +27,34 @@ pnpm install
 pnpm infra:up                              # Postgres :5433, Redis :6380
 pnpm --filter @runner/worker browsers:install
 
-pnpm dev                                   # all apps
-pnpm --filter @runner/api dev              # API only, :3001
-pnpm --filter @runner/live-web dev         # workspace, :5173
+pnpm dev                                   # all apps, with reload
+pnpm dev:api / dev:worker / dev:web        # one at a time
+```
 
+Datastores in Docker, the three apps on the host. That is the normal way to
+work: `tsx watch` restarts the API and worker on save and Vite serves the
+workspace with HMR, none of which a container image does — `pnpm up` bakes a
+`vite build` behind nginx, so a source edit is invisible until you rebuild.
+
+`pnpm dev` reads `.env.local` through Node's own `--env-file-if-exists`, so
+there is no dotenv dependency and nothing to import. It is the host-side twin of
+`.env`, differing only where a container and the host disagree: `localhost:5433`
+and `localhost:6380` instead of the service names, and `localhost` instead of
+`host.docker.internal` in the demo auth profile. Without those two URLs the API
+silently falls back to in-memory adapters — accepting executions no worker will
+ever collect — and the worker exits 1, which is what made `pnpm dev` look broken
+before the file existed.
+
+The whole stack still runs in containers when you want it to:
+
+```bash
+pnpm up                                    # everything in Docker, no reload
+pnpm docker:apps:stop                      # drop the app containers, keep the datastores
+```
+
+Either way, the gate before a commit is the same:
+
+```bash
 pnpm typecheck && pnpm lint && pnpm test && pnpm build
 pnpm e2e                                   # real browser, needs API + worker
 ```

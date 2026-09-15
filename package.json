@@ -11,6 +11,10 @@
   "scripts": {
     "build": "turbo run build",
     "dev": "turbo run dev",
+    "dev:infra": "pnpm infra:up && pnpm dev",
+    "dev:api": "pnpm --filter @runner/api dev",
+    "dev:worker": "pnpm --filter @runner/worker dev",
+    "dev:web": "pnpm --filter @runner/live-web dev",
     "typecheck": "turbo run typecheck",
     "lint": "turbo run lint",
     "lint:fix": "turbo run lint -- --fix",
@@ -31,7 +35,8 @@
     "restart": "docker compose up -d --build --force-recreate",
     "db:generate": "pnpm --filter @runner/api exec drizzle-kit generate",
     "db:migrate": "pnpm --filter @runner/api run db:migrate",
-    "contracts:check": "pnpm --filter @runner/contracts-internal run test"
+    "contracts:check": "pnpm --filter @runner/contracts-internal run test",
+    "docker:apps:stop": "docker stop runner-full-api runner-full-worker runner-full-live-web"
   },
   "devDependencies": {
     "@eslint/js": "^9.18.0",
