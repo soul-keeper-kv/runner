@@ -136,6 +136,8 @@ export interface LiveSession {
   executionState: 'IDLE' | 'RUNNING' | 'PAUSED' | 'WAITING_USER' | 'FAILED' | 'CLOSED';
   currentStepId?: string;
   selectedElementId?: string;
+  authProfileRef?: string;
+  authenticatedAs?: string;
   revision: number;
   createdAt: string;
   updatedAt: string;
@@ -227,10 +229,20 @@ export const runnerApi = {
     return request(`/api/v1/inspections/${encodeURIComponent(inspectionId)}`);
   },
 
-  createLiveSession(workspaceRef: string, executionId?: string): Promise<LiveSession> {
+  /**
+   * Starts a live session, optionally authenticated as an execution profile.
+   *
+   * Only the profile *reference* is sent. The workspace never holds a
+   * credential, which is what lets this panel be a browser tab at all.
+   */
+  createLiveSession(
+    workspaceRef: string,
+    executionId?: string,
+    authProfileRef?: string,
+  ): Promise<LiveSession> {
     return request('/api/v1/live-sessions', {
       method: 'POST',
-      body: JSON.stringify({ workspaceRef, executionId }),
+      body: JSON.stringify({ workspaceRef, executionId, authProfileRef }),
     });
   },
 

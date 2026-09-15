@@ -92,8 +92,10 @@ interface LiveSessionState {
   scanned: ScannedElement[] | undefined;
   error: string | undefined;
 
-  start(workspaceRef: string): Promise<void>;
+  start(workspaceRef: string, authProfileRef?: string): Promise<void>;
   stop(): Promise<void>;
+  /** Logs the live browser in as a profile, in place, without restarting it. */
+  login(profileRef: string, force?: boolean): void;
   previewSelector(selector: SelectorDefinition): void;
   navigate(url: string): void;
   refreshSnapshot(): void;
@@ -142,11 +144,19 @@ export const useLiveSessionStore = create<LiveSessionState>((set, get) => ({
   scanned: undefined,
   error: undefined,
 
-  async start(workspaceRef: string) {
+  async start(workspaceRef: string, authProfileRef?: string) {
     set({ error: undefined });
 
     try {
-      const session = await runnerApi.createLiveSession(workspaceRef);
+      // Only the profile reference is sent. A workspace that held a password
+      // would be a credential store running in a browser tab.
+      const session = await runnerApi.createLiveSession(
+        workspaceRef,
+        undefined,
+        authProfileRef === undefined || authProfileRef.trim().length === 0
+          ? undefined
+          : authProfileRef.trim(),
+      );
       set({ session });
 
       socket?.close();
@@ -189,6 +199,30 @@ export const useLiveSessionStore = create<LiveSessionState>((set, get) => ({
       scan: undefined,
       scanned: undefined,
     });
+  },
+
+  /**
+   * Logs the held browser in as a profile.
+   *
+   * Used when a session's profile had no stored session yet, or when the
+   * application signed the user out under a view that has been open a while.
+   * The browser is not restarted — that is the point of doing it as a command.
+   */
+  login(profileRef: string, force = false) {
+    const { session } = get();
+    if (session === undefined || socket === undefined) {
+      set({ error: 'Start a live session before logging in.' });
+      return;
+    }
+
+    const sent = socket.send({
+      id: `cmd_${Date.now().toString(36)}`,
+      sessionId: session.id,
+      type: 'auth.login',
+      payload: { profileRef, force },
+    });
+
+    if (!sent) set({ error: 'The live socket is not connected.' });
   },
 
   previewSelector(selector: SelectorDefinition) {
