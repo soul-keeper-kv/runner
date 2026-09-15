@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Sign in required</title>
+  </head>
+  <body>
+    <!--
+      The unauthenticated half of /orders, served by scripts/auth-demo.mjs when
+      the request carries no session cookie.
+
+      It deliberately looks like a real login wall rather than an error page:
+      the failure the demo exists to show is a Runner that "reached the page"
+      and then resolved its targets against a sign-in form, which is what
+      happens when a live session opens without a stored session.
+    -->
+    <h1 id="heading">Sign in required</h1>
+    <p data-testid="wall-message">
+      This page is only available to a signed-in user.
+      <a href="/login" data-testid="go-to-login">Go to sign in</a>
+    </p>
+  </body>
+</html>

@@ -110,8 +110,16 @@ workspace draws highlights from. Phases 5, 6, 9+ (auth, preconditions, picking,
 recorder, healing, AI) exist as ports and stubs that return
 `CAPABILITY_NOT_IMPLEMENTED` naming their phase.
 
-The live `browser`, `selector`, `state`, `element`, `registry` and `recording`
-namespaces are registered.
+The live `browser`, `selector`, `state`, `element`, `registry`, `recording` and
+`auth` namespaces are registered.
+
+A live session reaches a page that only renders for a signed-in user by naming
+an execution profile: `POST /api/v1/live-sessions` takes `authProfileRef`, the
+runtime applies that profile's stored session when it opens the browser, and
+`auth.login` performs the login *into the browser already open* when nothing is
+stored yet or the application signed the user out. `scripts/auth-demo.mjs`
+demonstrates the whole path against a fixture app whose page is genuinely gated
+on a session cookie.
 Leave a namespace unregistered until it works: an unregistered command returns
 `LIVE_COMMAND_UNSUPPORTED` naming it, which tells a client developer more than a
 silent no-op.

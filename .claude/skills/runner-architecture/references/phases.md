@@ -15,9 +15,9 @@ so there is something to compare a model's answer against.
 | 3 | Locator engine: generate, score, validate, resolve | **Done** |
 | 3.5 | Page inspection API: URL in, draft registry entries out | **Done** |
 | 4 | Registry: stable ids, names, aliases, fallbacks, history | **Done** |
-| 5 | Authentication: `storageState`, form login, profiles | **Done** (FORM_LOGIN + STORAGE_STATE) |
+| 5 | Authentication: `storageState`, form login, profiles | **Done** (FORM_LOGIN + STORAGE_STATE; executions, inspections and live sessions) |
 | 6 | Preconditions: handlers, explicit pre-steps | **Done** (entityState needs a seeding port) |
-| 7 | LiveSession: capability dispatch wired end to end | **Done** (browser, selector, state, element, registry, recording) |
+| 7 | LiveSession: capability dispatch wired end to end | **Done** (browser, selector, state, element, registry, recording, auth) |
 | 8 | Live preview: screenshot view, bbox highlight, confirm/reject | **Done** (view + highlight) |
 | 9 | Pick element: click a point, ranked selectors back | **Done** |
 | 10 | Registry drafts and revisions | **Done** (live editing, Redis-backed, shared by API + worker) |
@@ -52,6 +52,13 @@ direct update path added "just for imports" removes that permanently.
 **Phase 5 (Auth)** must not put a password in Test IR, the Registry, or a log.
 IR references a profile; the profile references a secret; only the worker
 running that execution resolves it.
+
+The same rule binds the live `auth.login` command, and more tightly: it arrives
+over a WebSocket from a browser tab, so its payload names a profile and
+`additionalProperties` is `false` — a client cannot even send a field called
+`password`. A live session must also never conclude it is authenticated by
+reading the page; `authenticatedAs` is set from a restored session or a
+completed login, nothing else.
 
 **Phase 6 (Preconditions)** must not report a setup failure as a test failure.
 `PRECONDITION_FAILED` and `ASSERTION_FAILED` have different `kind` values for

@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Orders</title>
+  </head>
+  <body>
+    <!--
+      A page that only renders its content to a logged-in visitor, used by
+      scripts/auth-demo.mjs.
+
+      The gate is a session cookie, checked on the server by the demo script
+      rather than in this markup: a page that decided by reading a query
+      parameter would let the Runner "reach" it without ever authenticating,
+      which is precisely the thing the demo is supposed to prove.
+
+      So there are two documents behind one URL. This is the authenticated one.
+    -->
+    <h1 id="heading">Open orders</h1>
+    <p>Signed in as <span data-testid="current-user">manager@example.com</span></p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Order</th>
+          <th>Customer</th>
+          <th>Status</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td data-testid="order-ref">SO-10481</td>
+          <td>Bright Harbour Ltd</td>
+          <td>Awaiting approval</td>
+        </tr>
+        <tr>
+          <td data-testid="order-ref">SO-10482</td>
+          <td>Keppel Logistics</td>
+          <td>Awaiting approval</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <button type="button" data-testid="approve-order">Approve order</button>
+    <a href="/logout" data-testid="sign-out">Sign out</a>
+  </body>
+</html>
