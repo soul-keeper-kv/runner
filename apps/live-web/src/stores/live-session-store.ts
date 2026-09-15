@@ -778,6 +778,16 @@ function handleMessage(
       }
 
       if (message.result.ok) {
+        /*
+         * A succeeded command clears the last failure.
+         *
+         * Otherwise a warning outlives its cause: correcting a bad scan root
+         * left "ELEMENT_NOT_FOUND: inspection root #nope" sitting above a
+         * panel that had just scanned correctly. A stale warning is worse than
+         * none, because it teaches the reader that the warnings are noise.
+         */
+        if (get().error !== undefined) set({ error: undefined });
+
         // A frame is tens of kilobytes of base64; logging it would bury every
         // other entry, so snapshots are summarized instead.
         const snapshotResult = asSnapshot(message.result.result);
