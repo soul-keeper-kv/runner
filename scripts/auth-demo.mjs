@@ -23,10 +23,23 @@
  * reading a query parameter would let the Runner "reach" it without ever
  * authenticating, which would make this demo prove nothing.
  *
+ * Running it against the apps from source:
+ *
  *   pnpm infra:up
  *   pnpm --filter @runner/api dev
  *   RUNNER_AUTH_PROFILES='…' MANAGER_USER=… MANAGER_PASS=… pnpm --filter @runner/worker dev
  *   node scripts/auth-demo.mjs
+ *
+ * Or against the containerized stack (`pnpm up`), with the profile and
+ * credentials in an untracked `.env` that compose reads:
+ *
+ *   FIXTURE_HOST=host.docker.internal node scripts/auth-demo.mjs
+ *
+ * That variable is the whole difference between the two. The fixture app always
+ * runs on *this* machine, so a worker inside a container cannot reach it at
+ * `localhost` — that name means the container. The profile's `loginUrl` needs
+ * the same treatment, which is why the committed `.env.example` and the compose
+ * file both mention `host.docker.internal`.
  *
  * The worker needs the profile in its environment; this script prints the exact
  * value to use if it is missing. Environment:
@@ -34,6 +47,8 @@
  *   RUNNER_API_URL    default http://localhost:3001
  *   RUNNER_WS_URL     default ws://localhost:3001
  *   FIXTURE_PORT      default 8899
+ *   FIXTURE_HOST      default localhost — the host the *browser* uses to reach
+ *                     the fixture, not the interface it binds
  *   WORKSPACE_REF     default workspace_demo
  *   AUTH_PROFILE_REF  default MANAGER
  *   DEMO_USER         default manager@example.com
@@ -51,6 +66,15 @@ import WebSocket from 'ws';
 const API = process.env.RUNNER_API_URL ?? 'http://localhost:3001';
 const WS = process.env.RUNNER_WS_URL ?? 'ws://localhost:3001';
 const FIXTURE_PORT = Number.parseInt(process.env.FIXTURE_PORT ?? '8899', 10);
+/**
+ * The host the Runner's browser uses to reach the fixture app.
+ *
+ * Separate from the port the fixture binds, because the two are not the same
+ * machine when the worker runs in a container: `localhost` there is the
+ * container itself, and the demo failed with PAGE_NOT_REACHABLE that looked
+ * exactly like a broken Runner.
+ */
+const FIXTURE_HOST = process.env.FIXTURE_HOST ?? 'localhost';
 const WORKSPACE_REF = process.env.WORKSPACE_REF ?? 'workspace_demo';
 const PROFILE_REF = process.env.AUTH_PROFILE_REF ?? 'MANAGER';
 const DEMO_USER = process.env.DEMO_USER ?? 'manager@example.com';
@@ -259,7 +283,9 @@ class LiveSessionClient {
 
 async function main() {
   const fixture = await startFixture();
-  const base = `http://localhost:${FIXTURE_PORT}`;
+  // Every URL handed to the Runner is built from FIXTURE_HOST; the server
+  // itself still listens on every interface of this machine.
+  const base = `http://${FIXTURE_HOST}:${FIXTURE_PORT}`;
   console.log(`demo app on ${base}  (/login, /orders)`);
   console.log(`  /orders renders the orders table only with a valid ${SESSION_COOKIE} cookie\n`);
 

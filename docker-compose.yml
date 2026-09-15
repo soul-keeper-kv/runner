@@ -115,9 +115,22 @@ services:
       # Auth profiles reference credentials by environment-variable NAME, so the
       # profile JSON is safe to put here while the secrets stay in the host env.
       RUNNER_AUTH_PROFILES: ${RUNNER_AUTH_PROFILES:-}
+      # The variables a profile's `secretRefs` name have to exist *in this
+      # container*: the worker resolves them itself, and a missing one fails the
+      # login with "Missing credential environment variable(s)" rather than
+      # typing an empty password. Add a line here for every credential a profile
+      # references; the values stay in the host environment or an untracked .env.
+      MANAGER_USER: ${MANAGER_USER:-}
+      MANAGER_PASS: ${MANAGER_PASS:-}
     # Chromium needs more than Docker's default 64MB of shared memory; without
     # this it crashes on pages with large composited layers.
     shm_size: 1gb
+    # A profile's `loginUrl` often points at an application running on the
+    # developer's own machine rather than inside this network, and `localhost`
+    # in here means the container. This makes `host.docker.internal` resolve on
+    # Linux too, where it is not built in.
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
     depends_on:
       postgres:
         condition: service_healthy
