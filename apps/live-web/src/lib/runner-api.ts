@@ -143,6 +143,54 @@ export type AuthStrategy =
  * `secretsPresent` is field *names*, never values — that is the whole reason a
  * profile is safe to list in a browser at all.
  */
+/**
+ * Where a token has to end up for the application to accept it.
+ *
+ * A list rather than a mode because there is no portable answer: an SPA reads
+ * storage during bootstrap, a server-rendered app reads a cookie, an API-first
+ * one wants the header — and one mid-migration needs two at once.
+ */
+export type TokenPlacement =
+  | { kind: 'header'; name?: string; prefix?: string }
+  | {
+      kind: 'localStorage' | 'sessionStorage';
+      key: string;
+      /** Envelope with a `{{token}}` placeholder, for an app that stores JSON. */
+      jsonTemplate?: string;
+      origin?: string;
+    }
+  | {
+      kind: 'cookie';
+      name: string;
+      domain?: string;
+      path?: string;
+      httpOnly?: boolean;
+      secure?: boolean;
+      sameSite?: 'Strict' | 'Lax' | 'None';
+    };
+
+/** How the Runner obtains a token: one stored, or one fetched with credentials. */
+export type TokenSource =
+  | { kind: 'static'; secretRef: string }
+  | {
+      kind: 'apiLogin';
+      url: string;
+      method?: 'POST' | 'PUT' | 'GET';
+      /** `{{secretRef}}` placeholders, substituted on the worker. */
+      bodyTemplate?: string;
+      contentType?: string;
+      headers?: ProfileHeader[];
+      tokenPath: string;
+      expiresInPath?: string;
+    };
+
+export interface ProfileHeader {
+  name: string;
+  /** A literal value, or absent when `secretRef` supplies it. */
+  value?: string;
+  secretRef?: string;
+}
+
 export interface AuthProfile {
   ref: string;
   workspaceRef: string;
@@ -152,6 +200,9 @@ export interface AuthProfile {
   formFields: Record<string, string>;
   secretsPresent: string[];
   secretRefs: Record<string, string>;
+  tokenPlacements?: TokenPlacement[];
+  tokenSource?: TokenSource;
+  extraHeaders?: ProfileHeader[];
   createdAt: string;
   updatedAt: string;
 }
@@ -164,6 +215,9 @@ export interface SaveAuthProfileBody {
   secretRefs?: Record<string, string>;
   /** Omitted fields keep their value; an empty string removes one. */
   secrets?: Record<string, string>;
+  tokenPlacements?: TokenPlacement[];
+  tokenSource?: TokenSource;
+  extraHeaders?: ProfileHeader[];
 }
 
 export interface LiveSession {

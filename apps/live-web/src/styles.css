@@ -602,3 +602,49 @@ button.link {
     grid-template-columns: 1fr;
   }
 }
+
+/*
+ * Section headings inside a panel.
+ *
+ * The auth profile editor grew three sections — where a token comes from, where
+ * it goes, and the headers that accompany it — and without a visible break the
+ * form read as one undifferentiated column of inputs.
+ */
+.panel h4 {
+  margin: 1.1rem 0 0.4rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted, #8b93a7);
+}
+
+.panel h4:first-of-type {
+  margin-top: 0.6rem;
+}
+
+/* The login request body: monospace, because it is JSON with placeholders. */
+.field textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.45rem 0.55rem;
+  border: 1px solid var(--border, #2a2f3a);
+  border-radius: 4px;
+  background: var(--input-bg, #12151c);
+  color: inherit;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  resize: vertical;
+}
+
+.field select {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.4rem 0.5rem;
+  border: 1px solid var(--border, #2a2f3a);
+  border-radius: 4px;
+  background: var(--input-bg, #12151c);
+  color: inherit;
+  font-size: 0.82rem;
+}

@@ -5,6 +5,7 @@ import {
   RunnerApiError,
   type AuthProfile,
   type AuthStrategy,
+  type TokenPlacement,
 } from '../../lib/runner-api.js';
 
 /**
@@ -40,14 +41,59 @@ interface FieldDraft {
   value: string;
 }
 
-const NEW_PROFILE: {
+/** One header the profile sends with every request. */
+interface HeaderDraft {
+  name: string;
+  value: string;
+  /** Names a credential instead of holding one, so the value stays sealed. */
+  secretRef: string;
+}
+
+/**
+ * Where the token goes.
+ *
+ * Kept as a flat draft rather than the discriminated union the contract uses,
+ * because a form is edited field by field: a user switching from a header to a
+ * storage key should not lose what they typed.
+ */
+interface PlacementDraft {
+  kind: 'header' | 'localStorage' | 'sessionStorage' | 'cookie';
+  /** Header or cookie name. */
+  name: string;
+  /** Header value prefix. */
+  prefix: string;
+  /** Storage key. */
+  key: string;
+  /** JSON envelope with a {{token}} placeholder. */
+  jsonTemplate: string;
+}
+
+interface ProfileDraft {
   ref: string;
   displayName: string;
   strategy: AuthStrategy;
   loginUrl: string;
   submitIntent: string;
   fields: FieldDraft[];
-} = {
+  headers: HeaderDraft[];
+  /** `static` takes a token from the credentials above; `apiLogin` fetches one. */
+  tokenKind: 'static' | 'apiLogin';
+  tokenSecretRef: string;
+  tokenLoginUrl: string;
+  tokenBodyTemplate: string;
+  tokenPath: string;
+  placements: PlacementDraft[];
+}
+
+const NEW_PLACEMENT: PlacementDraft = {
+  kind: 'header',
+  name: '',
+  prefix: 'Bearer ',
+  key: '',
+  jsonTemplate: '',
+};
+
+const NEW_PROFILE: ProfileDraft = {
   ref: '',
   displayName: '',
   strategy: 'FORM_LOGIN',
@@ -57,6 +103,13 @@ const NEW_PROFILE: {
     { key: 'username', intent: '', value: '' },
     { key: 'password', intent: '', value: '' },
   ],
+  headers: [],
+  tokenKind: 'static',
+  tokenSecretRef: 'token',
+  tokenLoginUrl: '',
+  tokenBodyTemplate: '{"username":"{{username}}","password":"{{password}}"}',
+  tokenPath: 'data.access_token',
+  placements: [NEW_PLACEMENT],
 };
 
 export function AuthProfilePanel(): JSX.Element {
@@ -73,6 +126,8 @@ export function AuthProfilePanel(): JSX.Element {
     retry: false,
   });
 
+  const usesToken = draft.strategy === 'API_TOKEN';
+
   const save = useMutation({
     mutationFn: () => {
       const formFields: Record<string, string> = {};
@@ -87,11 +142,35 @@ export function AuthProfilePanel(): JSX.Element {
       }
       if (draft.submitIntent.trim().length > 0) formFields.submit = draft.submitIntent.trim();
 
+      // A header value typed here is a credential like any other, so it is
+      // sent as a secret and referenced by name rather than stored literally.
+      const extraHeaders = draft.headers
+        .filter((header) => header.name.trim().length > 0)
+        .map((header) => {
+          const name = header.name.trim();
+          if (header.secretRef.trim().length > 0) {
+            const ref = header.secretRef.trim();
+            if (header.value.length > 0) secrets[ref] = header.value;
+            return { name, secretRef: ref };
+          }
+          return { name, value: header.value };
+        });
+
       return runnerApi.saveAuthProfile(workspaceRef, draft.ref.trim(), {
         displayName: draft.displayName.trim().length > 0 ? draft.displayName.trim() : draft.ref,
         strategy: draft.strategy,
         ...(draft.loginUrl.trim().length > 0 ? { loginUrl: draft.loginUrl.trim() } : {}),
         formFields,
+        ...(extraHeaders.length > 0 ? { extraHeaders } : {}),
+        // Only for a token strategy: sending a token configuration with a
+        // FORM_LOGIN profile would store one a later reader could mistake for
+        // deliberate.
+        ...(usesToken
+          ? {
+              tokenSource: tokenSourceOf(draft),
+              tokenPlacements: placementsOf(draft),
+            }
+          : {}),
         ...(Object.keys(secrets).length > 0 ? { secrets } : {}),
       });
     },
@@ -117,6 +196,8 @@ export function AuthProfilePanel(): JSX.Element {
   const edit = (profile: AuthProfile): void => {
     const entries = Object.entries(profile.formFields).filter(([key]) => key !== 'submit');
 
+    const source = profile.tokenSource;
+
     setDraft({
       ref: profile.ref,
       displayName: profile.displayName,
@@ -127,6 +208,33 @@ export function AuthProfilePanel(): JSX.Element {
         entries.length > 0
           ? entries.map(([key, intent]) => ({ key, intent, value: '' }))
           : NEW_PROFILE.fields,
+      // A header's value comes back only when it was literal; one naming a
+      // secret shows its reference, and the value stays where it was sealed.
+      headers: (profile.extraHeaders ?? []).map((header) => ({
+        name: header.name,
+        value: header.value ?? '',
+        secretRef: header.secretRef ?? '',
+      })),
+      tokenKind: source?.kind ?? NEW_PROFILE.tokenKind,
+      tokenSecretRef:
+        source?.kind === 'static' ? source.secretRef : NEW_PROFILE.tokenSecretRef,
+      tokenLoginUrl: source?.kind === 'apiLogin' ? source.url : '',
+      tokenBodyTemplate:
+        source?.kind === 'apiLogin'
+          ? (source.bodyTemplate ?? '')
+          : NEW_PROFILE.tokenBodyTemplate,
+      tokenPath: source?.kind === 'apiLogin' ? source.tokenPath : NEW_PROFILE.tokenPath,
+      placements:
+        profile.tokenPlacements === undefined || profile.tokenPlacements.length === 0
+          ? NEW_PROFILE.placements
+          : profile.tokenPlacements.map((placement) => ({
+              kind: placement.kind,
+              name: 'name' in placement ? (placement.name ?? '') : '',
+              prefix: 'prefix' in placement ? (placement.prefix ?? '') : 'Bearer ',
+              key: 'key' in placement ? placement.key : '',
+              jsonTemplate:
+                'jsonTemplate' in placement ? (placement.jsonTemplate ?? '') : '',
+            })),
     });
     setEditing(profile.ref);
     setNotice(`Editing ${profile.ref}. Leave a credential blank to keep the stored one.`);
@@ -297,15 +405,222 @@ export function AuthProfilePanel(): JSX.Element {
         </button>
       </div>
 
-      <div className="field">
-        <label htmlFor="ap-submit">Submit control</label>
-        <input
-          id="ap-submit"
-          value={draft.submitIntent}
-          placeholder="Log in"
-          onChange={(event) => setDraft({ ...draft, submitIntent: event.target.value })}
-        />
+      {!usesToken && (
+        <div className="field">
+          <label htmlFor="ap-submit">Submit control</label>
+          <input
+            id="ap-submit"
+            value={draft.submitIntent}
+            placeholder="Log in"
+            onChange={(event) => setDraft({ ...draft, submitIntent: event.target.value })}
+          />
+        </div>
+      )}
+
+      {usesToken && (
+        <>
+          <h4 className="small">Where the token comes from</h4>
+
+          <div className="field">
+            <label htmlFor="ap-token-kind">Source</label>
+            <select
+              id="ap-token-kind"
+              value={draft.tokenKind}
+              onChange={(event) =>
+                setDraft({ ...draft, tokenKind: event.target.value as 'static' | 'apiLogin' })
+              }
+            >
+              <option value="static">A token I paste in</option>
+              <option value="apiLogin">Exchange credentials at a login endpoint</option>
+            </select>
+          </div>
+
+          {draft.tokenKind === 'static' ? (
+            <div className="field">
+              <label htmlFor="ap-token-secret">Credential field holding the token</label>
+              <input
+                id="ap-token-secret"
+                value={draft.tokenSecretRef}
+                placeholder="token"
+                onChange={(event) => setDraft({ ...draft, tokenSecretRef: event.target.value })}
+              />
+              <span className="muted">
+                Add a field above with this name and paste the token as its value. It is sealed
+                like a password, and the Runner never returns it.
+              </span>
+            </div>
+          ) : (
+            <>
+              <div className="field">
+                <label htmlFor="ap-token-url">Login endpoint</label>
+                <input
+                  id="ap-token-url"
+                  value={draft.tokenLoginUrl}
+                  placeholder="https://app.example.com/api/auth/login"
+                  onChange={(event) => setDraft({ ...draft, tokenLoginUrl: event.target.value })}
+                />
+              </div>
+              <div className="field">
+                <label htmlFor="ap-token-body">Request body</label>
+                <textarea
+                  id="ap-token-body"
+                  rows={3}
+                  value={draft.tokenBodyTemplate}
+                  onChange={(event) =>
+                    setDraft({ ...draft, tokenBodyTemplate: event.target.value })
+                  }
+                />
+                <span className="muted">
+                  <code>{'{{fieldName}}'}</code> is replaced with that credential, escaped, on the
+                  worker. The credential never reaches this page.
+                </span>
+              </div>
+              <div className="field">
+                <label htmlFor="ap-token-path">Path to the token in the response</label>
+                <input
+                  id="ap-token-path"
+                  value={draft.tokenPath}
+                  placeholder="data.access_token"
+                  onChange={(event) => setDraft({ ...draft, tokenPath: event.target.value })}
+                />
+                <span className="muted">
+                  Required, and never guessed: whichever string looks like a JWT is a refresh
+                  token about as often as an access token.
+                </span>
+              </div>
+            </>
+          )}
+
+          <h4 className="small">Where the token goes</h4>
+          {draft.placements.map((placement, index) => (
+            <div className="field" key={index}>
+              <div className="profile-field-row">
+                <select
+                  value={placement.kind}
+                  onChange={(event) =>
+                    updatePlacement(index, {
+                      kind: event.target.value as PlacementDraft['kind'],
+                    })
+                  }
+                >
+                  <option value="header">Request header</option>
+                  <option value="localStorage">localStorage</option>
+                  <option value="sessionStorage">sessionStorage</option>
+                  <option value="cookie">Cookie</option>
+                </select>
+
+                {placement.kind === 'header' ? (
+                  <>
+                    <input
+                      value={placement.name}
+                      placeholder="Authorization"
+                      onChange={(event) => updatePlacement(index, { name: event.target.value })}
+                    />
+                    <input
+                      value={placement.prefix}
+                      placeholder="Bearer "
+                      onChange={(event) => updatePlacement(index, { prefix: event.target.value })}
+                    />
+                  </>
+                ) : placement.kind === 'cookie' ? (
+                  <input
+                    value={placement.name}
+                    placeholder="session"
+                    onChange={(event) => updatePlacement(index, { name: event.target.value })}
+                  />
+                ) : (
+                  <>
+                    <input
+                      value={placement.key}
+                      placeholder="access_token"
+                      onChange={(event) => updatePlacement(index, { key: event.target.value })}
+                    />
+                    <input
+                      value={placement.jsonTemplate}
+                      placeholder={'{"state":{"token":"{{token}}"}}'}
+                      onChange={(event) =>
+                        updatePlacement(index, { jsonTemplate: event.target.value })
+                      }
+                    />
+                  </>
+                )}
+              </div>
+              {placement.kind !== 'header' && placement.kind !== 'cookie' && (
+                <span className="muted">
+                  Storage key, then an optional JSON envelope with <code>{'{{token}}'}</code> — many
+                  apps keep <code>{'{"state":{"token":"…"}}'}</code>, and a bare string there reads
+                  as a corrupt session.
+                </span>
+              )}
+            </div>
+          ))}
+
+          <div className="button-row">
+            <button
+              type="button"
+              onClick={() =>
+                setDraft({ ...draft, placements: [...draft.placements, NEW_PLACEMENT] })
+              }
+            >
+              Add placement
+            </button>
+            {draft.placements.length > 1 && (
+              <button
+                type="button"
+                onClick={() => setDraft({ ...draft, placements: draft.placements.slice(0, -1) })}
+              >
+                Remove last
+              </button>
+            )}
+          </div>
+        </>
+      )}
+
+      <h4 className="small">Extra request headers</h4>
+      {draft.headers.map((header, index) => (
+        <div className="field" key={index}>
+          <div className="profile-field-row">
+            <input
+              value={header.name}
+              placeholder="X-Tenant"
+              onChange={(event) => updateHeader(index, { name: event.target.value })}
+            />
+            <input
+              value={header.secretRef}
+              placeholder="(secret name, optional)"
+              onChange={(event) => updateHeader(index, { secretRef: event.target.value })}
+            />
+            <input
+              type={header.secretRef.trim().length > 0 ? 'password' : 'text'}
+              value={header.value}
+              placeholder={
+                header.secretRef.trim().length > 0 && editing !== undefined ? 'unchanged' : 'value'
+              }
+              onChange={(event) => updateHeader(index, { value: event.target.value })}
+            />
+          </div>
+        </div>
+      ))}
+
+      <div className="button-row">
+        <button
+          type="button"
+          onClick={() =>
+            setDraft({
+              ...draft,
+              headers: [...draft.headers, { name: '', value: '', secretRef: '' }],
+            })
+          }
+        >
+          Add header
+        </button>
       </div>
+      <span className="muted">
+        Sent with every request this profile&apos;s browser makes — useful for a tenant id or an
+        API version. Give a secret name to store the value sealed instead of literally. A browser
+        sends these to <em>every</em> origin the page reaches, including third parties, so a
+        credential here is trusted to all of them.
+      </span>
 
       <div className="button-row">
         <button
@@ -338,6 +653,88 @@ export function AuthProfilePanel(): JSX.Element {
     const fields = draft.fields.map((field, i) => (i === index ? { ...field, ...patch } : field));
     setDraft({ ...draft, fields });
   }
+
+  function updateHeader(index: number, patch: Partial<HeaderDraft>): void {
+    const headers = draft.headers.map((header, i) =>
+      i === index ? { ...header, ...patch } : header,
+    );
+    setDraft({ ...draft, headers });
+  }
+
+  function updatePlacement(index: number, patch: Partial<PlacementDraft>): void {
+    const placements = draft.placements.map((placement, i) =>
+      i === index ? { ...placement, ...patch } : placement,
+    );
+    setDraft({ ...draft, placements });
+  }
+}
+
+/**
+ * The token source as the contract expects it.
+ *
+ * Built from the flat draft rather than edited as a union, so switching between
+ * a stored token and a login endpoint does not discard what the user typed for
+ * the other one.
+ */
+function tokenSourceOf(draft: ProfileDraft): NonNullable<AuthProfile['tokenSource']> {
+  if (draft.tokenKind === 'static') {
+    return { kind: 'static', secretRef: draft.tokenSecretRef.trim() || 'token' };
+  }
+
+  return {
+    kind: 'apiLogin',
+    url: draft.tokenLoginUrl.trim(),
+    ...(draft.tokenBodyTemplate.trim().length > 0
+      ? { bodyTemplate: draft.tokenBodyTemplate }
+      : {}),
+    tokenPath: draft.tokenPath.trim(),
+  };
+}
+
+/**
+ * Drops the fields that do not apply to each placement kind.
+ *
+ * The callback's return type is annotated rather than inferred: each branch
+ * produces a differently shaped object, and TypeScript widens them to a union
+ * of arrays instead of an array of the union.
+ */
+function placementsOf(draft: ProfileDraft): TokenPlacement[] {
+  return draft.placements.flatMap((placement): TokenPlacement[] => {
+    switch (placement.kind) {
+      case 'header':
+        return [
+          {
+            kind: 'header' as const,
+            ...(placement.name.trim().length > 0 ? { name: placement.name.trim() } : {}),
+            // An empty prefix is meaningful — a raw token with no `Bearer ` —
+            // so it is sent whenever the field differs from the default.
+            ...(placement.prefix !== 'Bearer ' ? { prefix: placement.prefix } : {}),
+          },
+        ];
+
+      case 'localStorage':
+      case 'sessionStorage': {
+        if (placement.key.trim().length === 0) return [];
+        return [
+          {
+            kind: placement.kind,
+            key: placement.key.trim(),
+            ...(placement.jsonTemplate.trim().length > 0
+              ? { jsonTemplate: placement.jsonTemplate }
+              : {}),
+          },
+        ];
+      }
+
+      case 'cookie': {
+        if (placement.name.trim().length === 0) return [];
+        return [{ kind: 'cookie' as const, name: placement.name.trim() }];
+      }
+
+      default:
+        return [];
+    }
+  });
 }
 
 function describe(cause: unknown): string {
