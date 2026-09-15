@@ -1,0 +1,109 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://runner.local/schemas/execution-result-v1.schema.json",
+  "title": "ExecutionResultV1",
+  "description": "The body returned by GET /api/v1/executions/:executionId and delivered to a completion webhook.",
+  "type": "object",
+  "required": ["contractVersion", "executionId", "workspaceRef", "status", "mode", "steps"],
+  "additionalProperties": false,
+  "properties": {
+    "contractVersion": { "const": "runner.execution.v1" },
+    "executionId": { "type": "string" },
+    "requestId": { "type": "string" },
+    "workspaceRef": { "type": "string" },
+    "externalTestCaseRef": { "type": "string" },
+    "status": {
+      "type": "string",
+      "enum": ["QUEUED", "RUNNING", "WAITING_USER", "PASSED", "FAILED", "CANCELLED"]
+    },
+    "mode": { "type": "string", "enum": ["AUTO", "REVIEW", "INTERACTIVE"] },
+    "startedAt": { "type": "string", "format": "date-time" },
+    "completedAt": { "type": "string", "format": "date-time" },
+    "durationMs": { "type": "integer", "minimum": 0 },
+    "steps": { "type": "array", "items": { "$ref": "#/$defs/stepResult" } },
+    "error": { "$ref": "#/$defs/error" }
+  },
+  "$defs": {
+    "error": {
+      "type": "object",
+      "description": "Structured error. `kind` separates a genuine test failure from a setup or infrastructure problem.",
+      "required": ["code", "kind", "message", "retryable"],
+      "properties": {
+        "code": { "type": "string" },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "TEST_FAILURE",
+            "PRECONDITION_FAILURE",
+            "RESOLUTION_FAILURE",
+            "INFRASTRUCTURE_FAILURE",
+            "CONTRACT_FAILURE"
+          ]
+        },
+        "message": { "type": "string" },
+        "retryable": { "type": "boolean" },
+        "details": { "type": "object" },
+        "cause": { "type": "string" }
+      }
+    },
+    "selector": {
+      "type": "object",
+      "description": "A structured selector from the Runner selector DSL. Never executable code.",
+      "required": ["type"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "testId",
+            "role",
+            "label",
+            "placeholder",
+            "altText",
+            "title",
+            "text",
+            "css",
+            "xpath"
+          ]
+        },
+        "value": { "type": "string" },
+        "role": { "type": "string" },
+        "name": { "type": "string" },
+        "exact": { "type": "boolean" }
+      }
+    },
+    "resolvedElement": {
+      "type": "object",
+      "required": ["confidence", "selector"],
+      "properties": {
+        "elementId": { "type": "string" },
+        "displayName": { "type": "string" },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "selector": { "$ref": "#/$defs/selector" },
+        "alternatives": { "type": "array", "items": { "$ref": "#/$defs/selector" } }
+      }
+    },
+    "stepResult": {
+      "type": "object",
+      "required": ["stepId", "type", "status"],
+      "properties": {
+        "stepId": { "type": "string" },
+        "type": { "type": "string" },
+        "status": {
+          "type": "string",
+          "enum": ["PENDING", "RUNNING", "PASSED", "FAILED", "SKIPPED"]
+        },
+        "startedAt": { "type": "string", "format": "date-time" },
+        "completedAt": { "type": "string", "format": "date-time" },
+        "durationMs": { "type": "integer", "minimum": 0 },
+        "resolvedElement": { "$ref": "#/$defs/resolvedElement" },
+        "evidence": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Short human-readable reasons behind the resolution decision."
+        },
+        "error": { "$ref": "#/$defs/error" },
+        "artifactIds": { "type": "array", "items": { "type": "string" } }
+      }
+    }
+  }
+}

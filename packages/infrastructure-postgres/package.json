@@ -1,0 +1,35 @@
+{
+  "name": "@runner/infrastructure-postgres",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Postgres-backed adapters shared by the API and the worker. The system of record for the Registry, runs and revisions. Infrastructure only — never imported by domain or application code.",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint src",
+    "test": "vitest run --passWithNoTests",
+    "test:watch": "vitest",
+    "clean": "rimraf dist .turbo *.tsbuildinfo"
+  },
+  "dependencies": {
+    "@runner/application": "workspace:*",
+    "@runner/domain": "workspace:*",
+    "@runner/registry-model": "workspace:*",
+    "@runner/selector-model": "workspace:*",
+    "@runner/shared": "workspace:*",
+    "postgres": "^3.4.5"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.3",
+    "vitest": "^2.1.8"
+  }
+}

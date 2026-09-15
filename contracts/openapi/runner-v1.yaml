@@ -1,0 +1,1347 @@
+openapi: 3.1.0
+
+info:
+  title: Runner Service API
+  version: 1.0.0
+  description: |
+    The public, versioned contract of the Runner Service.
+
+    The Runner is a standalone bounded service. It **executes** submitted Test
+    IR; it does not author test cases and does not generate Test IR from
+    natural language. A Test Authoring / IR Generation service integrates with
+    the Runner through this document alone — there is no supported source-code
+    dependency in either direction, and a caller may be written in any language.
+
+    Three consumption styles are equally supported after submitting a run:
+    poll `GET /api/v1/executions/{executionId}`, receive a webhook via
+    `callback`, or consume the SSE stream at `/events`.
+
+servers:
+  - url: http://localhost:3001
+    description: Local development
+
+tags:
+  - name: Health
+  - name: Capabilities
+    description: Discover what this deployment supports before integrating.
+  - name: Executions
+  - name: Inspections
+    description: |
+      Read a page and report what is on it. The one entry point that needs no
+      Test IR: submit a URL, receive the page's fields and submit control, each
+      with a ranked selector. Nothing is clicked, filled or asserted.
+  - name: Validation
+    description: Check a payload against the published contract without running it.
+  - name: Registry
+    description: Read Runner-owned element knowledge. Optional for integration.
+  - name: Live Sessions
+    description: Hold a browser open for live authoring, preview and picking.
+
+paths:
+  /health:
+    get:
+      tags: [Health]
+      summary: Liveness probe
+      description: Reports process health only; it does not probe Postgres or Redis.
+      responses:
+        '200':
+          description: The service is running.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: ok }
+                  version: { type: string }
+                  uptimeSeconds: { type: integer }
+
+  /ready:
+    get:
+      tags: [Health]
+      summary: Readiness probe
+      responses:
+        '200':
+          description: The service is ready to accept work.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string }
+                  persistence: { type: string, example: postgres+redis }
+
+  /openapi.json:
+    get:
+      tags: [Capabilities]
+      summary: This document, as JSON
+      responses:
+        '200':
+          description: The OpenAPI document.
+          content:
+            application/json:
+              schema: { type: object }
+
+  /api/v1/capabilities:
+    get:
+      tags: [Capabilities]
+      summary: Describe supported contracts and features
+      description: |
+        Call this before integrating. It reports the contract versions this
+        build accepts, the supported action types, and whether optional
+        features such as self-healing or AI resolution are AVAILABLE, PLANNED
+        or DISABLED in this deployment.
+      responses:
+        '200':
+          description: Runner capabilities.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Capabilities'
+
+  /api/v1/schemas:
+    get:
+      tags: [Capabilities]
+      summary: List the published JSON Schemas
+      responses:
+        '200':
+          description: Available schema documents.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  schemas:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        name: { type: string }
+                        url: { type: string }
+
+  /api/v1/schemas/{name}:
+    get:
+      tags: [Capabilities]
+      summary: Fetch one JSON Schema
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+            enum:
+              [
+                test-ir,
+                execution-request,
+                execution-result,
+                inspection-request,
+                live-command,
+                public-event,
+              ]
+      responses:
+        '200':
+          description: A JSON Schema document.
+          content:
+            application/json:
+              schema: { type: object }
+        '404':
+          $ref: '#/components/responses/Error'
+
+  /api/v1/executions:
+    post:
+      tags: [Executions]
+      summary: Submit a Test IR execution
+      description: |
+        Validates the payload, stores an immutable snapshot of it for audit and
+        replay, queues a browser job, and returns `202 Accepted` immediately.
+        Browser work happens in a separate worker process.
+
+        Send an `Idempotency-Key` header so a retried request returns the
+        original execution instead of starting a second browser run.
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: false
+          schema: { type: string }
+          description: Scoped per workspace. A repeat returns the original execution.
+        - name: X-Request-Id
+          in: header
+          required: false
+          schema: { type: string }
+        - name: X-Correlation-Id
+          in: header
+          required: false
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExecutionRequestV1'
+      responses:
+        '202':
+          description: The execution was accepted and queued.
+          headers:
+            Location:
+              schema: { type: string }
+              description: The status URL for this execution.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExecutionAcceptedV1'
+        '400':
+          $ref: '#/components/responses/Error'
+
+  /api/v1/executions/{executionId}:
+    get:
+      tags: [Executions]
+      summary: Get execution status and result
+      parameters:
+        - $ref: '#/components/parameters/ExecutionId'
+      responses:
+        '200':
+          description: The current state of the execution.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExecutionResultV1'
+        '404':
+          $ref: '#/components/responses/Error'
+
+  /api/v1/executions/{executionId}/cancel:
+    post:
+      tags: [Executions]
+      summary: Request cancellation
+      description: |
+        Cancellation is cooperative. A queued job is removed; a running one
+        stops at its next step boundary so the browser context and its
+        artifacts are released cleanly.
+      parameters:
+        - $ref: '#/components/parameters/ExecutionId'
+      responses:
+        '202':
+          description: Cancellation was requested.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  executionId: { type: string }
+                  status: { type: string, example: CANCELLED }
+        '404':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+
+  /api/v1/executions/{executionId}/events:
+    get:
+      tags: [Executions]
+      summary: Stream execution progress (SSE)
+      description: |
+        A one-way `text/event-stream`. The first event is a full snapshot;
+        subsequent events are sent when the execution changes, and the stream
+        closes once the execution reaches a terminal status.
+      parameters:
+        - $ref: '#/components/parameters/ExecutionId'
+      responses:
+        '200':
+          description: An event stream.
+          content:
+            text/event-stream:
+              schema: { type: string }
+        '404':
+          $ref: '#/components/responses/Error'
+
+  /api/v1/inspections:
+    post:
+      tags: [Inspections]
+      summary: Inspect a page and report its fields
+      description: |
+        For a caller that has a URL and nothing else — a Test Authoring service
+        about to write its first step, or a form-fill integration that does not
+        yet know what the page contains.
+
+        Returns `202` immediately and does the browser work in a worker, so a
+        page that takes thirty seconds to render never holds a public API
+        connection open. Poll the `statusUrl` for the result.
+
+        This is deliberately not an execution: nothing is clicked, filled or
+        asserted, so there is no verdict and no timeline.
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: false
+          description: |
+            Send one. A network timeout on the caller's side is
+            indistinguishable from a lost response, and without a key a retry
+            starts a second browser run.
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InspectionRequestV1'
+      responses:
+        '202':
+          description: The inspection was accepted and queued.
+          headers:
+            Location:
+              description: The status URL for this inspection.
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InspectionAcceptedV1'
+        '400':
+          $ref: '#/components/responses/Error'
+
+  /api/v1/inspections/{inspectionId}:
+    get:
+      tags: [Inspections]
+      summary: Fetch an inspection result
+      description: |
+        `elements`, `fields` and `submit` are empty while the status is QUEUED
+        or RUNNING. Poll until the status is COMPLETED or FAILED.
+      parameters:
+        - $ref: '#/components/parameters/InspectionId'
+      responses:
+        '200':
+          description: The inspection, complete or still in progress.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InspectionResultV1'
+        '404':
+          $ref: '#/components/responses/Error'
+
+  /api/v1/validate/inspection:
+    post:
+      tags: [Validation]
+      summary: Validate an inspection request without running it
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InspectionRequestV1'
+      responses:
+        '200':
+          description: The request is valid.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  valid: { type: boolean, enum: [true] }
+        '400':
+          $ref: '#/components/responses/Error'
+
+  /api/v1/validate/execution:
+    post:
+      tags: [Validation]
+      summary: Validate an execution request without running it
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExecutionRequestV1'
+      responses:
+        '200':
+          description: The payload is valid.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  valid: { type: boolean, example: true }
+        '400':
+          $ref: '#/components/responses/Error'
+
+  /api/v1/validate/test-ir:
+    post:
+      tags: [Validation]
+      summary: Validate a Test IR document without running it
+      description: |
+        Lets a generating service verify its output before scheduling a browser
+        run, turning an execution-time failure into an authoring-time one.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TestIRV1'
+      responses:
+        '200':
+          description: The Test IR is valid.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  valid: { type: boolean, example: true }
+        '400':
+          $ref: '#/components/responses/Error'
+
+  /api/v1/registry/elements/{elementId}:
+    get:
+      tags: [Registry]
+      summary: Get a registry element
+      description: |
+        `workspaceRef` is required on every Registry read. An element belonging
+        to another workspace answers `404`, never `403`: saying "forbidden"
+        would confirm that the id exists somewhere.
+      parameters:
+        - name: elementId
+          in: path
+          required: true
+          schema: { type: string }
+        - $ref: '#/components/parameters/WorkspaceRefQuery'
+      responses:
+        '200':
+          description: The registry element.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RegistryElementV1'
+        '400':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+
+  /api/v1/registry/elements:
+    get:
+      tags: [Registry]
+      summary: Search registry elements
+      description: |
+        Searches by display name, alias, system name and description, in that
+        order of authority. Each result carries `matchedOn` and `matchScore`, so
+        a caller choosing between candidates can tell a human-authored name from
+        an inferred description match — which a bare list cannot express.
+      parameters:
+        - $ref: '#/components/parameters/WorkspaceRefQuery'
+        - name: query
+          in: query
+          description: Free text matched against names, aliases and descriptions.
+          schema: { type: string }
+        - name: role
+          in: query
+          description: |
+            Narrows to elements declaring this role. An element with no recorded
+            role is kept, so an entry that predates the hint is not excluded.
+          schema: { type: string }
+        - name: pageId
+          in: query
+          schema: { type: string }
+        - name: componentId
+          in: query
+          schema: { type: string }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100 }
+      responses:
+        '200':
+          description: Matching elements, strongest match first.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [elements]
+                properties:
+                  elements:
+                    type: array
+                    items:
+                      allOf:
+                        - $ref: '#/components/schemas/RegistryElementV1'
+                        - type: object
+                          required: [matchedOn, matchScore]
+                          properties:
+                            matchedOn:
+                              type: string
+                              enum: [ID, DISPLAY_NAME, ALIAS, SYSTEM_NAME, DESCRIPTION]
+                            matchScore:
+                              type: number
+                              minimum: 0
+                              maximum: 1
+        '400':
+          $ref: '#/components/responses/Error'
+
+  /api/v1/registry/pages:
+    get:
+      tags: [Registry]
+      summary: List registry pages
+      parameters:
+        - $ref: '#/components/parameters/WorkspaceRefQuery'
+      responses:
+        '200':
+          description: The workspace's pages.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [pages]
+                properties:
+                  pages:
+                    type: array
+                    items:
+                      type: object
+                      required: [pageId, displayName, urlPatterns, revision]
+                      properties:
+                        pageId: { type: string }
+                        displayName: { type: string }
+                        description: { type: string }
+                        urlPatterns:
+                          type: array
+                          items: { type: string }
+                        revision: { type: integer }
+        '400':
+          $ref: '#/components/responses/Error'
+
+  /api/v1/registry/components:
+    get:
+      tags: [Registry]
+      summary: List registry components
+      parameters:
+        - $ref: '#/components/parameters/WorkspaceRefQuery'
+        - name: pageId
+          in: query
+          schema: { type: string }
+      responses:
+        '200':
+          description: The workspace's components.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [components]
+                properties:
+                  components:
+                    type: array
+                    items:
+                      type: object
+                      required: [componentId, displayName, revision]
+                      properties:
+                        componentId: { type: string }
+                        displayName: { type: string }
+                        description: { type: string }
+                        pageId: { type: string }
+                        revision: { type: integer }
+        '400':
+          $ref: '#/components/responses/Error'
+
+  /api/v1/registry/modifications:
+    get:
+      tags: [Registry]
+      summary: List pending registry changes
+      description: |
+        Drafts and proposals awaiting a decision. Every Registry change is a
+        draft first — including one proposed by self-healing — so this is where
+        a reviewer sees what is waiting. Decided modifications are terminal and
+        do not appear here.
+      parameters:
+        - $ref: '#/components/parameters/WorkspaceRefQuery'
+      responses:
+        '200':
+          description: Pending modifications.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [modifications]
+                properties:
+                  modifications:
+                    type: array
+                    items:
+                      type: object
+                      required: [id, entityKind, type, status, proposedBy, createdAt]
+                      properties:
+                        id: { type: string }
+                        entityKind: { type: string, enum: [ELEMENT, PAGE, COMPONENT] }
+                        entityId: { type: string }
+                        type:
+                          type: string
+                          enum:
+                            - SELECTOR_UPDATE
+                            - RENAME
+                            - DESCRIPTION_UPDATE
+                            - ALIAS_ADD
+                            - ALIAS_REMOVE
+                            - ELEMENT_CREATE
+                            - ELEMENT_DELETE
+                            - AVAILABILITY_UPDATE
+                        status: { type: string, enum: [DRAFT, PROPOSED] }
+                        proposedBy:
+                          type: string
+                          enum: [USER, AI, HEALING, RECORDER, SYSTEM]
+                        reason: { type: string }
+                        createdAt: { type: string, format: date-time }
+        '400':
+          $ref: '#/components/responses/Error'
+
+  /api/v1/registry/revisions/{entityId}:
+    get:
+      tags: [Registry]
+      summary: Read an entity's change history
+      description: |
+        Oldest revision first. `version` is monotonic per entity and is recorded
+        on each step result, so a past run stays explainable after the Registry
+        moves on.
+      parameters:
+        - name: entityId
+          in: path
+          required: true
+          schema: { type: string }
+        - $ref: '#/components/parameters/WorkspaceRefQuery'
+      responses:
+        '200':
+          description: The entity's revisions.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [revisions]
+                properties:
+                  revisions:
+                    type: array
+                    items:
+                      type: object
+                      required: [id, version, entityKind, changeType, changedBy, timestamp]
+                      properties:
+                        id: { type: string }
+                        version: { type: integer }
+                        entityKind: { type: string }
+                        changeType: { type: string }
+                        changedBy:
+                          type: string
+                          enum: [USER, AI, HEALING, RECORDER, SYSTEM]
+                        modificationId: { type: string }
+                        timestamp: { type: string, format: date-time }
+        '400':
+          $ref: '#/components/responses/Error'
+
+  /api/v1/registry/resolve:
+    get:
+      tags: [Registry]
+      summary: Resolve a target against the Registry alone
+      description: |
+        Answers whether a named target would resolve, without opening a browser.
+        Useful to an IR Generator that wants to check a target before submitting
+        a run. Supply `name` or `description`.
+      parameters:
+        - $ref: '#/components/parameters/WorkspaceRefQuery'
+        - name: name
+          in: query
+          schema: { type: string }
+        - name: description
+          in: query
+          schema: { type: string }
+        - name: role
+          in: query
+          schema: { type: string }
+      responses:
+        '200':
+          description: |
+            The resolution. `resolved: false` with no element means the Registry
+            holds nothing matching — not that the request was wrong.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [resolved, alternatives]
+                properties:
+                  resolved: { type: boolean }
+                  element:
+                    $ref: '#/components/schemas/RegistryElementV1'
+                  matchedOn:
+                    type: string
+                    enum: [ID, DISPLAY_NAME, ALIAS, SYSTEM_NAME, DESCRIPTION]
+                  matchScore: { type: number, minimum: 0, maximum: 1 }
+                  alternatives:
+                    type: array
+                    items:
+                      type: object
+                      required: [elementId, displayName, matchScore]
+                      properties:
+                        elementId: { type: string }
+                        displayName: { type: string }
+                        matchScore: { type: number }
+        '400':
+          $ref: '#/components/responses/Error'
+
+  /api/v1/live-sessions:
+    post:
+      tags: [Live Sessions]
+      summary: Start a live session
+      description: |
+        Reserves a live browser identity. Realtime interaction then happens over
+        the WebSocket at `/api/v1/live-sessions/{sessionId}/ws`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [workspaceRef]
+              properties:
+                workspaceRef: { type: string }
+                executionId: { type: string }
+                ttlSeconds: { type: integer, minimum: 60, maximum: 7200 }
+      responses:
+        '201':
+          description: The live session was created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LiveSession'
+        '400':
+          $ref: '#/components/responses/Error'
+
+  /api/v1/live-sessions/{sessionId}:
+    get:
+      tags: [Live Sessions]
+      summary: Get a live session
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      responses:
+        '200':
+          description: The live session.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LiveSession'
+        '404':
+          $ref: '#/components/responses/Error'
+    delete:
+      tags: [Live Sessions]
+      summary: Close a live session
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      responses:
+        '204':
+          description: The session was closed.
+        '404':
+          $ref: '#/components/responses/Error'
+
+components:
+  parameters:
+    ExecutionId:
+      name: executionId
+      in: path
+      required: true
+      schema: { type: string }
+    SessionId:
+      name: sessionId
+      in: path
+      required: true
+      schema: { type: string }
+    InspectionId:
+      name: inspectionId
+      in: path
+      required: true
+      schema: { type: string }
+    WorkspaceRefQuery:
+      name: workspaceRef
+      in: query
+      required: true
+      description: |
+        Scopes the read. Required rather than defaulted: a lookup that searched
+        every workspace would leak one tenant's element names to another.
+      schema: { type: string, minLength: 1 }
+
+  responses:
+    Error:
+      description: A structured Runner error.
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error:
+                $ref: '#/components/schemas/RunnerError'
+
+  schemas:
+    RunnerError:
+      type: object
+      description: |
+        `kind` separates a genuine test failure from a setup or infrastructure
+        problem, so a reporting system never blames the application under test
+        for a Runner-side issue.
+      required: [code, kind, message, retryable]
+      properties:
+        code:
+          type: string
+          example: ELEMENT_NOT_FOUND
+        kind:
+          type: string
+          enum:
+            - TEST_FAILURE
+            - PRECONDITION_FAILURE
+            - RESOLUTION_FAILURE
+            - INFRASTRUCTURE_FAILURE
+            - CONTRACT_FAILURE
+        message: { type: string }
+        retryable: { type: boolean }
+        details: { type: object }
+
+    ElementIntentV1:
+      type: object
+      description: |
+        How a step names its target. Note the absence of a raw selector:
+        selectors live in the Runner Registry, so renaming an element or
+        healing its selector never invalidates existing Test IR.
+      minProperties: 1
+      properties:
+        elementId:
+          type: string
+          description: Stable Registry ID. The strongest form of reference.
+        name:
+          type: string
+          example: Create Customer Button
+        description:
+          type: string
+          example: Creates a new customer using values in the customer form.
+        role: { type: string, example: button }
+        semantic: { type: string }
+        componentId: { type: string }
+        pageId: { type: string }
+
+    PreconditionV1:
+      type: object
+      description: |
+        A requirement that must hold before the step runs. Failing to reach the
+        state is reported as PRECONDITION_FAILED, never as a test failure.
+      required: [type]
+      properties:
+        type:
+          type: string
+          enum: [authenticated, entityState, uiState, urlMatches, elementVisible]
+        profile: { type: string, example: MANAGER }
+        entity: { type: string, example: ORDER }
+        state: { type: string, example: SUBMITTED }
+        urlPattern: { type: string }
+        target:
+          $ref: '#/components/schemas/ElementIntentV1'
+
+    AssertionV1:
+      type: object
+      required: [type]
+      properties:
+        type:
+          type: string
+          enum:
+            [visible, hidden, text, containsText, value, enabled, disabled, checked, count, urlMatches]
+        expected:
+          oneOf:
+            - { type: string }
+            - { type: number }
+            - { type: boolean }
+        timeoutMs: { type: integer }
+
+    TestActionV1:
+      type: object
+      required: [id, type]
+      properties:
+        id: { type: string }
+        type:
+          type: string
+          enum: [goto, click, dblclick, fill, select, check, uncheck, hover, press, assert, wait]
+        label: { type: string }
+        target:
+          $ref: '#/components/schemas/ElementIntentV1'
+        value:
+          oneOf:
+            - { type: string }
+            - { type: number }
+            - { type: boolean }
+        assertion:
+          $ref: '#/components/schemas/AssertionV1'
+        preconditions:
+          type: array
+          items:
+            $ref: '#/components/schemas/PreconditionV1'
+        timeoutMs: { type: integer }
+        continueOnFailure: { type: boolean, default: false }
+
+    TestIRV1:
+      type: object
+      required: [id, name, steps]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        description: { type: string }
+        steps:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/TestActionV1'
+        metadata:
+          type: object
+          additionalProperties: { type: string }
+
+    ExecutionRequestV1:
+      type: object
+      required: [contractVersion, irVersion, workspaceRef, test]
+      properties:
+        contractVersion:
+          type: string
+          enum: [runner.execution.v1]
+        irVersion:
+          type: string
+          enum: [test-ir.v1]
+        requestId: { type: string }
+        tenantRef:
+          type: string
+          description: Opaque identifier owned by the caller. The Runner never interprets it.
+        workspaceRef:
+          type: string
+          description: Scopes the Registry and every authorization check.
+        externalTestCaseRef:
+          type: string
+          description: Opaque reference to the caller's test case, e.g. an Xray key.
+        environmentRef: { type: string }
+        authProfileRef:
+          type: string
+          description: Credentials are referenced by profile, never inlined.
+        mode:
+          type: string
+          enum: [AUTO, REVIEW, INTERACTIVE]
+          default: AUTO
+        test:
+          $ref: '#/components/schemas/TestIRV1'
+        options:
+          type: object
+          properties:
+            headless: { type: boolean, default: true }
+            viewport:
+              type: object
+              properties:
+                width: { type: integer }
+                height: { type: integer }
+            baseUrl: { type: string, format: uri }
+            defaultTimeoutMs: { type: integer }
+            stopOnFailure: { type: boolean, default: true }
+            enableRegistryLearning: { type: boolean, default: true }
+            enableSelfHealing: { type: boolean, default: false }
+        callback:
+          type: object
+          required: [url, events]
+          properties:
+            url: { type: string, format: uri }
+            events:
+              type: array
+              items:
+                type: string
+                enum:
+                  - execution.queued
+                  - execution.started
+                  - execution.step.started
+                  - execution.step.completed
+                  - execution.waiting_user
+                  - execution.completed
+                  - execution.failed
+                  - execution.cancelled
+            signatureHeader: { type: string }
+
+    ExecutionAcceptedV1:
+      type: object
+      required: [executionId, status, statusUrl, eventsUrl, acceptedAt]
+      properties:
+        executionId: { type: string, example: run_01j8x2c4 }
+        status: { type: string, example: QUEUED }
+        statusUrl: { type: string }
+        eventsUrl: { type: string }
+        requestId: { type: string }
+        acceptedAt: { type: string, format: date-time }
+
+    SelectorDefinition:
+      type: object
+      description: |
+        A structured selector from the Runner selector DSL. Always data, never
+        executable code, so a selector can be stored, diffed, scored and
+        translated to another automation engine.
+      required: [type]
+      properties:
+        type:
+          type: string
+          enum: [testId, role, label, placeholder, altText, title, text, css, xpath]
+        value: { type: string }
+        role: { type: string }
+        name: { type: string }
+        exact: { type: boolean }
+
+    ExecutionStepResultV1:
+      type: object
+      required: [stepId, type, status]
+      properties:
+        stepId: { type: string }
+        type: { type: string }
+        status:
+          type: string
+          enum: [PENDING, RUNNING, PASSED, FAILED, SKIPPED]
+        startedAt: { type: string, format: date-time }
+        completedAt: { type: string, format: date-time }
+        durationMs: { type: integer }
+        resolvedElement:
+          type: object
+          properties:
+            elementId: { type: string }
+            displayName: { type: string }
+            confidence: { type: number, minimum: 0, maximum: 1 }
+            selector:
+              $ref: '#/components/schemas/SelectorDefinition'
+            alternatives:
+              type: array
+              items:
+                $ref: '#/components/schemas/SelectorDefinition'
+        evidence:
+          type: array
+          items: { type: string }
+          description: Short human-readable reasons behind the resolution decision.
+        error:
+          $ref: '#/components/schemas/RunnerError'
+        artifactIds:
+          type: array
+          items: { type: string }
+
+    ExecutionResultV1:
+      type: object
+      required: [contractVersion, executionId, workspaceRef, status, mode, steps]
+      properties:
+        contractVersion: { type: string, enum: [runner.execution.v1] }
+        executionId: { type: string }
+        requestId: { type: string }
+        workspaceRef: { type: string }
+        externalTestCaseRef: { type: string }
+        status:
+          type: string
+          enum: [QUEUED, RUNNING, WAITING_USER, PASSED, FAILED, CANCELLED]
+        mode:
+          type: string
+          enum: [AUTO, REVIEW, INTERACTIVE]
+        startedAt: { type: string, format: date-time }
+        completedAt: { type: string, format: date-time }
+        durationMs: { type: integer }
+        steps:
+          type: array
+          items:
+            $ref: '#/components/schemas/ExecutionStepResultV1'
+        error:
+          $ref: '#/components/schemas/RunnerError'
+
+    RegistryElementV1:
+      type: object
+      description: |
+        The public view of a registry element.
+
+        Note what is absent: the primary selector, its fallbacks and its
+        history. Test IR references an element by identity and meaning, never by
+        selector, so publishing the mechanics would invite a caller to embed one
+        — exactly what the Registry exists to prevent. `elementId` is immutable,
+        so IR referencing it survives every rename.
+      required:
+        [elementId, systemName, displayName, aliases, userConfirmed, confidence, revision, updatedAt]
+      properties:
+        elementId: { type: string, example: el_1923 }
+        systemName:
+          type: string
+          description: Normalized identifier used when generating Page Object code.
+        displayName: { type: string, example: Create Customer Button }
+        description: { type: string }
+        role: { type: string }
+        semanticType: { type: string }
+        aliases:
+          type: array
+          items: { type: string }
+          description: Other names this element answers to.
+        userConfirmed:
+          type: boolean
+          description: A human approved this mapping. The strongest confidence signal.
+        confidence:
+          type: number
+          minimum: 0
+          maximum: 1
+        revision: { type: integer }
+        pageId: { type: string }
+        componentId: { type: string }
+        updatedAt: { type: string, format: date-time }
+
+    InspectionRequestV1:
+      type: object
+      required: [contractVersion, workspaceRef, url]
+      additionalProperties: false
+      properties:
+        contractVersion:
+          type: string
+          enum: [runner.inspection.v1]
+        requestId:
+          type: string
+          description: Caller-side correlation id, echoed in the result.
+        tenantRef:
+          type: string
+          description: Opaque identifier owned by the caller. The Runner never interprets it.
+        workspaceRef:
+          type: string
+          minLength: 1
+          description: Scopes the Registry and every authorization check.
+        url:
+          type: string
+          format: uri
+          pattern: '^https?://'
+          description: |
+            The page to inspect. Only http and https are accepted, so a request
+            can never reach a local file or an internal scheme.
+        authProfileRef:
+          type: string
+          description: Credentials are referenced by profile, never inlined.
+        options:
+          type: object
+          additionalProperties: false
+          properties:
+            viewport:
+              type: object
+              required: [width, height]
+              properties:
+                width: { type: integer, minimum: 320, maximum: 7680 }
+                height: { type: integer, minimum: 240, maximum: 4320 }
+            waitUntil:
+              type: string
+              enum: [load, domcontentloaded, networkidle]
+              default: domcontentloaded
+              description: Use networkidle for a page that renders its form client-side.
+            waitForMs:
+              type: integer
+              minimum: 0
+              maximum: 30000
+              description: Settle time after navigation, for late-rendering widgets.
+            defaultTimeoutMs: { type: integer, minimum: 0, maximum: 600000 }
+            includeNonInputControls:
+              type: boolean
+              default: false
+              description: Also report links, tabs and menu items, not only fields to fill in.
+
+    InspectionAcceptedV1:
+      type: object
+      required: [inspectionId, status, statusUrl, acceptedAt]
+      properties:
+        inspectionId: { type: string, example: insp_01j8x2c4 }
+        status: { type: string, enum: [QUEUED, RUNNING, COMPLETED, FAILED] }
+        statusUrl: { type: string }
+        requestId: { type: string }
+        acceptedAt: { type: string, format: date-time }
+
+    InspectionSelectorV1:
+      type: object
+      description: |
+        A selector in the published, structured form. Kept as an open record
+        rather than a tagged union so adding a strategy stays a compatible
+        change for callers.
+      required: [type, score]
+      properties:
+        type: { type: string, example: testId }
+        value: { type: string }
+        role: { type: string }
+        name: { type: string }
+        score:
+          type: integer
+          minimum: 0
+          maximum: 100
+          description: Higher survives UI change better.
+
+    InspectionFieldV1:
+      type: object
+      description: |
+        One control a caller may need to supply a value for. `name` is what a
+        human would call the field, from its label or accessible name — not the
+        HTML `name` attribute, which is reported separately as `fieldName`
+        because it is frequently absent or machine-generated.
+      required: [name, type, required, enabled, selector, fallbacks]
+      properties:
+        name: { type: string }
+        type:
+          type: string
+          description: The HTML input type, or the ARIA role for non-input controls.
+        fieldName: { type: string }
+        placeholder: { type: string }
+        required: { type: boolean }
+        enabled: { type: boolean }
+        options:
+          type: array
+          items: { type: string }
+          description: Present for select and radio groups whose choices are enumerable.
+        selector:
+          $ref: '#/components/schemas/InspectionSelectorV1'
+        fallbacks:
+          type: array
+          items:
+            $ref: '#/components/schemas/InspectionSelectorV1'
+          description: Ranked alternatives, so a caller can heal a broken primary itself.
+
+    InspectionControlV1:
+      type: object
+      required: [name, role, selector, fallbacks]
+      properties:
+        name: { type: string }
+        role: { type: string }
+        selector:
+          $ref: '#/components/schemas/InspectionSelectorV1'
+        fallbacks:
+          type: array
+          items:
+            $ref: '#/components/schemas/InspectionSelectorV1'
+
+    InspectionElementV1:
+      type: object
+      description: |
+        A draft registry entry for one element found on the page — the shape
+        Page Object generation consumes. It is a draft: an inspection never
+        writes to the Registry, because registry changes go through a confirmed
+        modification so the audit trail stays intact.
+      required:
+        [systemName, displayName, role, interactable, editable, required, enabled, selector, fallbacks, confidence]
+      properties:
+        systemName:
+          type: string
+          description: Normalized identifier, safe to emit as code. Never raw user text.
+        displayName: { type: string }
+        description: { type: string }
+        role: { type: string }
+        semanticType:
+          type: string
+          description: Coarse classification — input, choice, button, link.
+        aliases:
+          type: array
+          items: { type: string }
+          description: Other names this element answers to, learned from the page.
+        interactable: { type: boolean }
+        editable: { type: boolean }
+        required: { type: boolean }
+        enabled: { type: boolean }
+        fieldType: { type: string }
+        fieldName: { type: string }
+        placeholder: { type: string }
+        selector:
+          $ref: '#/components/schemas/InspectionSelectorV1'
+        fallbacks:
+          type: array
+          items:
+            $ref: '#/components/schemas/InspectionSelectorV1'
+        confidence:
+          type: number
+          minimum: 0
+          maximum: 1
+          description: Selector strength only — a first sighting has no history.
+
+    InspectionPageV1:
+      type: object
+      required: [systemName, displayName, urlPattern]
+      properties:
+        systemName: { type: string }
+        displayName: { type: string }
+        urlPattern:
+          type: string
+          description: Matched against the current URL to recognize this page again.
+
+    InspectionResultV1:
+      type: object
+      required: [inspectionId, status, url, requestedUrl, elements, fields, queuedAt]
+      properties:
+        inspectionId: { type: string }
+        status:
+          type: string
+          enum: [QUEUED, RUNNING, COMPLETED, FAILED]
+        requestId: { type: string }
+        url:
+          type: string
+          description: The URL finally landed on, which a redirect or SSO hop may change.
+        requestedUrl: { type: string }
+        title: { type: string }
+        page:
+          $ref: '#/components/schemas/InspectionPageV1'
+        elements:
+          type: array
+          items:
+            $ref: '#/components/schemas/InspectionElementV1'
+          description: Empty while the inspection is QUEUED or RUNNING.
+        fields:
+          type: array
+          items:
+            $ref: '#/components/schemas/InspectionFieldV1'
+          description: The value-carrying subset of `elements`, as a convenience.
+        submit:
+          $ref: '#/components/schemas/InspectionControlV1'
+        controls:
+          type: array
+          items:
+            $ref: '#/components/schemas/InspectionControlV1'
+          description: Other interactable controls; only populated on request.
+        error:
+          $ref: '#/components/schemas/RunnerError'
+        queuedAt: { type: string, format: date-time }
+        startedAt: { type: string, format: date-time }
+        completedAt: { type: string, format: date-time }
+
+    LiveSession:
+      type: object
+      required: [id, workspaceRef, browserSessionId, executionState, revision, createdAt, updatedAt]
+      properties:
+        id: { type: string }
+        workspaceRef: { type: string }
+        browserSessionId: { type: string }
+        executionId: { type: string }
+        executionState:
+          type: string
+          enum: [IDLE, RUNNING, PAUSED, WAITING_USER, FAILED, CLOSED]
+        currentStepId: { type: string }
+        selectedElementId: { type: string }
+        revision:
+          type: integer
+          description: Incremented on every applied command, so clients can detect lost updates.
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        expiresAt: { type: string, format: date-time }
+
+    Capabilities:
+      type: object
+      properties:
+        runner:
+          type: object
+          properties:
+            name: { type: string }
+            version: { type: string }
+        contracts:
+          type: object
+          properties:
+            execution:
+              type: array
+              items: { type: string }
+            testIr:
+              type: array
+              items: { type: string }
+        actionTypes:
+          type: array
+          items: { type: string }
+        assertionTypes:
+          type: array
+          items: { type: string }
+        selectorStrategies:
+          type: array
+          items: { type: string }
+        executionModes:
+          type: array
+          items: { type: string }
+        liveCommands:
+          type: array
+          items: { type: string }
+        integrationStyles:
+          type: array
+          items: { type: string }
+        features:
+          type: array
+          items:
+            type: object
+            properties:
+              name: { type: string }
+              status:
+                type: string
+                enum: [AVAILABLE, PLANNED, DISABLED]
+              description: { type: string }

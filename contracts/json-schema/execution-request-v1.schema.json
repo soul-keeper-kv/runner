@@ -1,0 +1,99 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://runner.local/schemas/execution-request-v1.schema.json",
+  "title": "ExecutionRequestV1",
+  "description": "Public execution contract, version runner.execution.v1. This is the only payload an external Test Authoring / IR Generation service needs in order to run a browser test. No source-code dependency on the Runner is required.",
+  "type": "object",
+  "required": ["contractVersion", "irVersion", "workspaceRef", "test"],
+  "additionalProperties": false,
+  "properties": {
+    "contractVersion": {
+      "const": "runner.execution.v1",
+      "description": "Rejected with CONTRACT_VERSION_UNSUPPORTED if the Runner does not support it."
+    },
+    "irVersion": { "const": "test-ir.v1" },
+    "requestId": {
+      "type": "string",
+      "description": "Caller-side correlation id, echoed in every result and event."
+    },
+
+    "tenantRef": {
+      "type": "string",
+      "description": "Opaque tenant identifier owned by the calling service. The Runner never interprets it."
+    },
+    "workspaceRef": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Opaque workspace identifier. Scopes the Registry and all authorization checks."
+    },
+    "externalTestCaseRef": {
+      "type": "string",
+      "description": "Opaque reference to the caller's test case, e.g. a Jira/Xray key."
+    },
+
+    "environmentRef": { "type": "string", "description": "Runner-owned environment reference." },
+    "authProfileRef": {
+      "type": "string",
+      "description": "Runner-owned execution profile. Credentials are referenced, never inlined."
+    },
+
+    "mode": {
+      "type": "string",
+      "enum": ["AUTO", "REVIEW", "INTERACTIVE"],
+      "default": "AUTO",
+      "description": "AUTO runs unattended; REVIEW pauses on uncertain resolutions; INTERACTIVE is user-driven."
+    },
+
+    "test": { "$ref": "test-ir-v1.schema.json" },
+
+    "options": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "headless": { "type": "boolean", "default": true },
+        "viewport": {
+          "type": "object",
+          "required": ["width", "height"],
+          "additionalProperties": false,
+          "properties": {
+            "width": { "type": "integer", "minimum": 320, "maximum": 7680 },
+            "height": { "type": "integer", "minimum": 240, "maximum": 4320 }
+          }
+        },
+        "baseUrl": { "type": "string", "format": "uri" },
+        "defaultTimeoutMs": { "type": "integer", "minimum": 0, "maximum": 600000 },
+        "stopOnFailure": { "type": "boolean", "default": true },
+        "enableRegistryLearning": { "type": "boolean", "default": true },
+        "enableSelfHealing": { "type": "boolean", "default": false }
+      }
+    },
+
+    "callback": {
+      "type": "object",
+      "description": "Optional webhook delivery. Callers may equally poll the status endpoint or consume the realtime event stream.",
+      "required": ["url", "events"],
+      "additionalProperties": false,
+      "properties": {
+        "url": { "type": "string", "format": "uri" },
+        "events": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "enum": [
+              "execution.queued",
+              "execution.started",
+              "execution.step.started",
+              "execution.step.completed",
+              "execution.waiting_user",
+              "execution.completed",
+              "execution.failed",
+              "execution.cancelled"
+            ]
+          }
+        },
+        "signatureHeader": { "type": "string" }
+      }
+    }
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "name": "@runner/worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Internal Playwright execution worker. Never called directly by external services.",
+  "main": "./dist/main.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx watch src/main.ts",
+    "start": "node dist/main.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint src",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "browsers:install": "playwright install chromium",
+    "clean": "rimraf dist .turbo *.tsbuildinfo"
+  },
+  "dependencies": {
+    "@runner/application": "workspace:*",
+    "@runner/domain": "workspace:*",
+    "@runner/infrastructure-postgres": "workspace:*",
+    "@runner/infrastructure-redis": "workspace:*",
+    "@runner/live-protocol": "workspace:*",
+    "@runner/registry-model": "workspace:*",
+    "@runner/selector-model": "workspace:*",
+    "@runner/shared": "workspace:*",
+    "@runner/test-ir-model": "workspace:*",
+    "bullmq": "^5.34.10",
+    "ioredis": "^5.4.2",
+    "playwright": "^1.49.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3",
+    "vitest": "^2.1.8"
+  }
+}

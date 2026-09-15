@@ -1,0 +1,513 @@
+/*
+ * Workspace styling.
+ *
+ * A small hand-written sheet rather than a UI framework: this surface exists to
+ * exercise the Runner protocol, and every dependency here is one more thing to
+ * keep current for a tool the product's own frontend will not reuse.
+ */
+
+:root {
+  --bg: #0f1117;
+  --panel: #171a23;
+  --panel-border: #252a38;
+  --text: #e6e8ef;
+  --muted: #8b91a4;
+  --accent: #4f8ef7;
+  --ok: #2ea043;
+  --warn: #d29922;
+  --danger: #f85149;
+  --radius: 8px;
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+code {
+  font-family: ui-monospace, 'Cascadia Code', 'SF Mono', Menlo, monospace;
+  font-size: 12px;
+}
+
+.app {
+  max-width: 1500px;
+  margin: 0 auto;
+  padding: 24px 20px 48px;
+}
+
+.app-header h1 {
+  margin: 0 0 4px;
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.app-header p {
+  margin: 0 0 24px;
+  max-width: 70ch;
+}
+
+.layout {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 16px;
+  align-items: start;
+}
+
+.column {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius);
+  padding: 16px;
+}
+
+.panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.panel h2 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 12px;
+  min-width: 0;
+}
+
+.field label,
+.field .muted {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+input,
+select {
+  width: 100%;
+  padding: 7px 10px;
+  background: #0d0f15;
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  color: var(--text);
+  font: inherit;
+}
+
+input:focus,
+select:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
+button {
+  padding: 7px 14px;
+  background: #232838;
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  font-weight: 500;
+}
+
+button.danger {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+button.link {
+  background: none;
+  border: none;
+  color: var(--muted);
+  padding: 0;
+}
+
+.button-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.segmented {
+  display: flex;
+  gap: 2px;
+}
+
+.segmented button {
+  padding: 4px 10px;
+  font-size: 12px;
+}
+
+.segmented button.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.small {
+  font-size: 12px;
+}
+
+.warn {
+  margin: 10px 0 0;
+  padding: 8px 10px;
+  background: rgba(210, 153, 34, 0.12);
+  border-left: 3px solid var(--warn);
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+.status {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border: 1px solid var(--panel-border);
+}
+
+.status-open {
+  color: var(--ok);
+  border-color: var(--ok);
+}
+
+.status-error,
+.status-closed {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+.session-meta {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 10px;
+  margin: 0 0 14px;
+}
+
+.session-meta dt {
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.session-meta dd {
+  margin: 2px 0 0;
+  overflow-wrap: anywhere;
+}
+
+.selector-preview {
+  display: block;
+  padding: 8px 10px;
+  background: #0d0f15;
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  overflow-wrap: anywhere;
+}
+
+.preview-result {
+  margin-top: 14px;
+  padding: 12px;
+  border-radius: 6px;
+  border: 1px solid var(--panel-border);
+}
+
+.preview-result.ok {
+  border-color: var(--ok);
+}
+
+.preview-result.ambiguous {
+  border-color: var(--warn);
+}
+
+.preview-result.empty {
+  border-color: var(--danger);
+}
+
+.preview-result dl {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(80px, 1fr));
+  gap: 10px;
+  margin: 0;
+}
+
+.preview-result dt {
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: uppercase;
+}
+
+.preview-result dd {
+  margin: 2px 0 0;
+  font-size: 16px;
+  font-weight: 500;
+}
+
+.feature-list {
+  list-style: none;
+  margin: 14px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.feature-list li {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 8px;
+  font-size: 12px;
+}
+
+.badge {
+  grid-row: 1;
+  align-self: start;
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  letter-spacing: 0.04em;
+}
+
+.badge-available {
+  background: rgba(46, 160, 67, 0.15);
+  color: var(--ok);
+}
+
+.badge-planned {
+  background: rgba(210, 153, 34, 0.15);
+  color: var(--warn);
+}
+
+.badge-disabled {
+  background: rgba(139, 145, 164, 0.15);
+  color: var(--muted);
+}
+
+.feature-name {
+  font-family: ui-monospace, monospace;
+}
+
+.feature-description {
+  grid-column: 2;
+  color: var(--muted);
+}
+
+.event-log {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 480px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.event-log li {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px 8px;
+  padding: 6px 8px;
+  background: #0d0f15;
+  border-left: 2px solid var(--panel-border);
+  border-radius: 4px;
+}
+
+.event-log li.event-error {
+  border-left-color: var(--danger);
+}
+
+.event-log li.event-result {
+  border-left-color: var(--ok);
+}
+
+.event-time {
+  color: var(--muted);
+  font-family: ui-monospace, monospace;
+}
+
+.event-label {
+  font-weight: 500;
+}
+
+.event-detail {
+  grid-column: 2;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+/*
+ * Live preview (blueprint section 37).
+ *
+ * The frame keeps the browser viewport's aspect ratio, set inline from the
+ * dimensions the worker reports, and every overlay box is positioned in
+ * percentages of it. That way one scaling rule covers any panel width, and the
+ * highlight cannot drift away from the element as the layout reflows.
+ */
+.live-frame {
+  position: relative;
+  width: 100%;
+  overflow: hidden;
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  background: #0d0f15;
+}
+
+.live-frame img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.live-box {
+  position: absolute;
+  pointer-events: none;
+  border-radius: 2px;
+}
+
+/* Every interactable element, when the overlay is switched on. */
+.live-box.candidate {
+  border: 1px solid rgba(79, 142, 247, 0.45);
+  background: rgba(79, 142, 247, 0.08);
+  pointer-events: auto;
+}
+
+/* The selector's own match, drawn over the candidates. */
+.live-box.match.unique {
+  border: 2px solid var(--ok);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.6);
+}
+
+/*
+ * Ambiguity is the state most worth seeing: acting on the first of several
+ * matches is how a run clicks the wrong row, so it is coloured as a warning
+ * rather than shown identically to a unique match.
+ */
+.live-box.match.ambiguous {
+  border: 2px dashed var(--warn);
+  background: rgba(210, 153, 34, 0.12);
+}
+
+.warn-inline {
+  color: var(--warn);
+}
+
+/*
+ * Element picking (blueprint sections 33-34).
+ *
+ * The frame becomes a crosshair while picking so it is obvious the next click
+ * goes to the page rather than to the UI.
+ */
+.live-frame.picking {
+  cursor: crosshair;
+}
+
+.live-frame.picking img {
+  /* A faint wash, so the frame reads as armed without obscuring the page. */
+  filter: saturate(0.85) brightness(0.95);
+}
+
+.live-box.picked {
+  border: 2px solid var(--accent);
+  background: rgba(79, 142, 247, 0.16);
+}
+
+.picked-element {
+  margin-top: 14px;
+  padding: 12px;
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+}
+
+.picked-element h3 {
+  margin: 0 0 8px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.selector-candidates {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.selector-candidates li {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px;
+  background: #0d0f15;
+  border: 1px solid var(--panel-border);
+  border-radius: 4px;
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+}
+
+/* A unique match is the one worth saving; anything else is a warning. */
+.selector-candidates li.unique {
+  border-left: 3px solid var(--ok);
+}
+
+.selector-candidates li.ambiguous {
+  border-left: 3px solid var(--warn);
+}
+
+.selector-candidates li.no-match {
+  border-left: 3px solid var(--danger);
+  opacity: 0.75;
+}
+
+.match-count {
+  color: var(--muted);
+  white-space: nowrap;
+}

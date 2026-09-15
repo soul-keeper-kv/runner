@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://runner.local/schemas/public-event-v1.schema.json",
+  "title": "PublicExecutionEventV1",
+  "description": "An execution progress event delivered over SSE, the live WebSocket, or a completion webhook. `sequence` is monotonic per execution so a consumer can detect a dropped event.",
+  "type": "object",
+  "required": ["type", "executionId", "sequence", "timestamp"],
+  "additionalProperties": false,
+  "properties": {
+    "type": {
+      "type": "string",
+      "enum": [
+        "execution.queued",
+        "execution.started",
+        "execution.step.started",
+        "execution.step.completed",
+        "execution.waiting_user",
+        "execution.completed",
+        "execution.failed",
+        "execution.cancelled"
+      ]
+    },
+    "executionId": { "type": "string" },
+    "sequence": { "type": "integer", "minimum": 0 },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "payload": { "type": "object" }
+  }
+}

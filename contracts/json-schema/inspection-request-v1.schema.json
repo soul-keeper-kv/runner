@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://runner.local/schemas/inspection-request-v1.schema.json",
+  "title": "InspectionRequestV1",
+  "description": "Public page-inspection contract, version runner.inspection.v1. Submits a URL and receives the page's input fields and submit control, each with a ranked selector. Unlike an execution it carries no Test IR: nothing is clicked, filled or asserted.",
+  "type": "object",
+  "required": ["contractVersion", "workspaceRef", "url"],
+  "additionalProperties": false,
+  "properties": {
+    "contractVersion": {
+      "const": "runner.inspection.v1",
+      "description": "Rejected with CONTRACT_VERSION_UNSUPPORTED if the Runner does not support it."
+    },
+    "requestId": {
+      "type": "string",
+      "description": "Caller-side correlation id, echoed in the result."
+    },
+
+    "tenantRef": {
+      "type": "string",
+      "description": "Opaque tenant identifier owned by the calling service. The Runner never interprets it."
+    },
+    "workspaceRef": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Opaque workspace identifier. Scopes the Registry and all authorization checks."
+    },
+
+    "url": {
+      "type": "string",
+      "format": "uri",
+      "pattern": "^https?://",
+      "description": "The page to inspect. Only http and https are accepted, so a request can never reach a local file or an internal scheme."
+    },
+    "authProfileRef": {
+      "type": "string",
+      "description": "Runner-owned execution profile used to reach an authenticated page. Credentials are referenced, never inlined."
+    },
+
+    "options": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "viewport": {
+          "type": "object",
+          "required": ["width", "height"],
+          "additionalProperties": false,
+          "properties": {
+            "width": { "type": "integer", "minimum": 320, "maximum": 7680 },
+            "height": { "type": "integer", "minimum": 240, "maximum": 4320 }
+          }
+        },
+        "waitUntil": {
+          "type": "string",
+          "enum": ["load", "domcontentloaded", "networkidle"],
+          "default": "domcontentloaded",
+          "description": "Use networkidle for a page that renders its form client-side."
+        },
+        "waitForMs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 30000,
+          "description": "Settle time after navigation, for late-rendering widgets."
+        },
+        "defaultTimeoutMs": { "type": "integer", "minimum": 0, "maximum": 600000 },
+        "includeNonInputControls": {
+          "type": "boolean",
+          "default": false,
+          "description": "Also report links, tabs and menu items, not only fields to fill in."
+        }
+      }
+    }
+  }
+}

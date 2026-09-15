@@ -1,0 +1,56 @@
+# Local development infrastructure for the Runner Service.
+#
+# Only what the Runner itself owns: Postgres for Registry, runs and revisions,
+# Redis for the internal execution queue and live-session state. Nothing here
+# is shared with a future Test Authoring / IR Generation service — that service
+# keeps its own database and talks to the Runner over HTTP (blueprint 3.6).
+#
+#   pnpm infra:up     start
+#   pnpm infra:logs   follow logs
+#   pnpm infra:down   stop
+
+name: runner-service
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: runner-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: runner
+      POSTGRES_PASSWORD: runner
+      POSTGRES_DB: runner
+      # Deterministic collation keeps index ordering identical across machines.
+      POSTGRES_INITDB_ARGS: '--encoding=UTF8 --locale=C'
+    ports:
+      # Non-default host ports so this never collides with an existing local
+      # Postgres or Redis a developer already runs.
+      - '5433:5432'
+    volumes:
+      - runner-postgres-data:/var/lib/postgresql/data
+      - ./migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U runner -d runner']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: runner-redis
+    restart: unless-stopped
+    # BullMQ requires keyspace notifications for delayed and stalled jobs.
+    command: redis-server --appendonly yes --notify-keyspace-events Ex
+    ports:
+      - '6380:6379'
+    volumes:
+      - runner-redis-data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  runner-postgres-data:
+  runner-redis-data:

@@ -1,0 +1,16 @@
+packages:
+  - 'apps/*'
+  - 'packages/*'
+
+allowBuilds:
+  esbuild: set this to true or false
+
+# Native postinstall scripts are opt-in in pnpm 10+. Listing them here keeps
+# `pnpm install` non-interactive and reproducible in CI.
+onlyBuiltDependencies:
+  - esbuild
+  - '@swc/core'
+  - '@nestjs/core'
+  - msgpackr-extract
+  - playwright
+  - playwright-core

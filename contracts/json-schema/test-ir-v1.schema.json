@@ -1,0 +1,198 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://runner.local/schemas/test-ir-v1.schema.json",
+  "title": "TestIRV1",
+  "description": "Public Test IR contract, version test-ir.v1. Produced by an external Test Authoring / IR Generation service and consumed by the Runner. The Runner never generates this from natural language.",
+  "type": "object",
+  "required": ["id", "name", "steps"],
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Caller-defined identifier for this IR document."
+    },
+    "name": { "type": "string", "minLength": 1 },
+    "description": { "type": "string" },
+    "steps": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/testAction" }
+    },
+    "metadata": {
+      "type": "object",
+      "description": "Opaque caller metadata, echoed back in results.",
+      "additionalProperties": { "type": "string" }
+    }
+  },
+  "$defs": {
+    "elementIntent": {
+      "type": "object",
+      "description": "How a step names its target. Note the absence of a raw selector: selectors live in the Runner Registry, so renaming or healing an element never invalidates existing IR.",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "elementId": {
+          "type": "string",
+          "description": "Stable Registry element ID. The strongest form of reference."
+        },
+        "name": {
+          "type": "string",
+          "description": "User-defined display name, e.g. 'Create Customer Button'."
+        },
+        "description": {
+          "type": "string",
+          "description": "Free-text meaning, used for semantic resolution when no ID exists."
+        },
+        "role": { "type": "string", "description": "ARIA role hint, e.g. 'button'." },
+        "semantic": { "type": "string", "description": "Semantic type hint, e.g. 'submit-button'." },
+        "componentId": { "type": "string" },
+        "pageId": { "type": "string" }
+      },
+      "anyOf": [
+        { "required": ["elementId"] },
+        { "required": ["name"] },
+        { "required": ["description"] },
+        { "required": ["semantic"] },
+        { "required": ["role"] }
+      ]
+    },
+
+    "precondition": {
+      "type": "object",
+      "description": "A requirement that must hold before the step runs. A failure to reach the state is reported as PRECONDITION_FAILED, never as a test failure.",
+      "required": ["type"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["authenticated", "entityState", "uiState", "urlMatches", "elementVisible"]
+        },
+        "profile": { "type": "string" },
+        "entity": { "type": "string" },
+        "state": { "type": "string" },
+        "urlPattern": { "type": "string" },
+        "target": { "$ref": "#/$defs/elementIntent" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "type": { "const": "authenticated" } }, "required": ["type"] },
+          "then": { "required": ["profile"] }
+        },
+        {
+          "if": { "properties": { "type": { "const": "entityState" } }, "required": ["type"] },
+          "then": { "required": ["entity", "state"] }
+        },
+        {
+          "if": { "properties": { "type": { "const": "uiState" } }, "required": ["type"] },
+          "then": { "required": ["state"] }
+        },
+        {
+          "if": { "properties": { "type": { "const": "urlMatches" } }, "required": ["type"] },
+          "then": { "required": ["urlPattern"] }
+        },
+        {
+          "if": { "properties": { "type": { "const": "elementVisible" } }, "required": ["type"] },
+          "then": { "required": ["target"] }
+        }
+      ]
+    },
+
+    "assertion": {
+      "type": "object",
+      "required": ["type"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "visible",
+            "hidden",
+            "text",
+            "containsText",
+            "value",
+            "enabled",
+            "disabled",
+            "checked",
+            "count",
+            "urlMatches"
+          ]
+        },
+        "expected": {
+          "type": ["string", "number", "boolean"],
+          "description": "Required for comparison assertions such as text, value and count."
+        },
+        "timeoutMs": { "type": "integer", "minimum": 0, "maximum": 600000 }
+      }
+    },
+
+    "testAction": {
+      "type": "object",
+      "required": ["id", "type"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "type": {
+          "type": "string",
+          "enum": [
+            "goto",
+            "click",
+            "dblclick",
+            "fill",
+            "select",
+            "check",
+            "uncheck",
+            "hover",
+            "press",
+            "assert",
+            "wait"
+          ]
+        },
+        "label": { "type": "string", "description": "Human-readable label for the timeline." },
+        "target": { "$ref": "#/$defs/elementIntent" },
+        "value": { "type": ["string", "number", "boolean"] },
+        "assertion": { "$ref": "#/$defs/assertion" },
+        "preconditions": { "type": "array", "items": { "$ref": "#/$defs/precondition" } },
+        "timeoutMs": { "type": "integer", "minimum": 0, "maximum": 600000 },
+        "continueOnFailure": { "type": "boolean", "default": false }
+      },
+      "allOf": [
+        {
+          "description": "Element-bound actions require a target.",
+          "if": {
+            "properties": {
+              "type": {
+                "enum": [
+                  "click",
+                  "dblclick",
+                  "fill",
+                  "select",
+                  "check",
+                  "uncheck",
+                  "hover",
+                  "press",
+                  "assert"
+                ]
+              }
+            },
+            "required": ["type"]
+          },
+          "then": { "required": ["target"] }
+        },
+        {
+          "description": "goto, fill, select and press require a value.",
+          "if": {
+            "properties": { "type": { "enum": ["goto", "fill", "select", "press"] } },
+            "required": ["type"]
+          },
+          "then": { "required": ["value"] }
+        },
+        {
+          "description": "assert steps require an assertion.",
+          "if": { "properties": { "type": { "const": "assert" } }, "required": ["type"] },
+          "then": { "required": ["assertion"] }
+        }
+      ]
+    }
+  }
+}
