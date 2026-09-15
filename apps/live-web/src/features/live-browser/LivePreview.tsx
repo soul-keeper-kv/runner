@@ -45,6 +45,10 @@ export function LivePreview(): JSX.Element {
   const error = useLiveSessionStore((state) => state.error);
   const scanRoot = useLiveSessionStore((state) => state.scanRoot);
   const setScanRoot = useLiveSessionStore((state) => state.setScanRoot);
+  const following = useLiveSessionStore((state) => state.following);
+  const toggleFollow = useLiveSessionStore((state) => state.toggleFollow);
+  const streaming = useLiveSessionStore((state) => state.streaming);
+  const toggleStream = useLiveSessionStore((state) => state.toggleStream);
 
   /** The rectangle being dragged right now, in viewport coordinates. */
   const [dragRect, setDragRect] = useState<ViewportRect | undefined>(undefined);
@@ -148,6 +152,28 @@ export function LivePreview(): JSX.Element {
               Download region JSON{inRegionCount === 0 ? '' : ` (${inRegionCount})`}
             </button>
           )}
+          {/*
+            Two ways to stop the preview being a still image, and the order
+            here is the order of preference: streaming pushes frames as the
+            page repaints, following asks for one on a timer. Following works
+            without a cross-process event bus, so it stays as the fallback.
+          */}
+          <button
+            type="button"
+            className={streaming ? 'primary' : undefined}
+            title="Stream frames from the browser as the page repaints"
+            onClick={() => toggleStream()}
+          >
+            {streaming ? 'Stop stream' : 'Stream page'}
+          </button>
+          <button
+            type="button"
+            className={following ? 'primary' : undefined}
+            title="Refresh the frame on a timer while the tab is visible"
+            onClick={() => toggleFollow()}
+          >
+            {following ? 'Stop following' : 'Follow page'}
+          </button>
           <button type="button" onClick={() => refresh()}>
             Refresh
           </button>

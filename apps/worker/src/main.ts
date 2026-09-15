@@ -4,6 +4,7 @@ import type { ExecutionJob, InspectionJob } from '@runner/application';
 import { createConsoleLogger, createSecretBox, systemClock, type LogLevel } from '@runner/shared';
 import { PlaywrightBrowserManager } from './infrastructure/playwright/playwright-browser-manager.js';
 import {
+  RedisEventBus,
   RedisExecutionStore,
   RedisInspectionStore,
   RedisLiveCommandTransport,
@@ -28,7 +29,6 @@ import {
   UiStateHandler,
   UrlMatchesHandler,
 } from './modules/state/page-state-handlers.js';
-import { InProcessEventBus } from './modules/live/event-bus.js';
 import {
   DEFAULT_LIVE_RUNTIME_OPTIONS,
   LiveSessionRuntime,
@@ -48,6 +48,7 @@ import {
 } from '@runner/infrastructure-postgres';
 import { SelectorCapability } from './capabilities/selector/selector-capability.js';
 import { StateCapability } from './capabilities/state/state-capability.js';
+import { ViewCapability } from './capabilities/view/view-capability.js';
 import { DefaultLocatorGenerator } from './modules/locator/locator-generator.js';
 import { runExecution } from './application/use-cases/run-execution.js';
 import { runInspection } from './application/use-cases/run-inspection.js';
@@ -224,7 +225,13 @@ async function bootstrap(): Promise<void> {
     logger,
   };
 
-  const eventBus = new InProcessEventBus(logger);
+  /*
+   * Redis-backed, because the events that matter most have to leave this
+   * process: the worker owns the browser and the API owns the public socket, so
+   * a streamed frame published in-process would reach nobody. `InProcessEventBus`
+   * stays the right bus for consumers that live here.
+   */
+  const eventBus = new RedisEventBus(redisUrl, logger);
 
   // Capabilities that are implemented are registered; the rest are absent on
   // purpose, so an unimplemented live command reports itself precisely rather
@@ -248,6 +255,10 @@ async function bootstrap(): Promise<void> {
   // that need a command — a profile logging in for the very first time, and an
   // application that signed the user out while the view stayed open.
   capabilities.register(new AuthCapability(auth, storageStates));
+  // The live view's streaming half: `state.snapshot` answers one request with
+  // one frame, this turns the engine's own stream on so the preview stops being
+  // a still image that only changes when someone asks.
+  capabilities.register(new ViewCapability());
 
   logger.info('Live capabilities registered', {
     commands: capabilities.supportedCommands().length,
@@ -274,6 +285,8 @@ async function bootstrap(): Promise<void> {
     // So a session that names a profile opens with that profile's stored
     // session already applied, rather than on a login page.
     auth,
+    // So `view.start` has somewhere to publish frames that the API can hear.
+    eventBus,
   );
 
   const liveTransport = new RedisLiveCommandTransport(redisUrl, logger);

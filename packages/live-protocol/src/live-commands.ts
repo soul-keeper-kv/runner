@@ -58,6 +58,10 @@ export const LIVE_COMMAND_TYPES = [
   'recording.start',
   'recording.observe',
   'recording.stop',
+
+  // live view
+  'view.start',
+  'view.stop',
 ] as const;
 
 export type LiveCommandType = (typeof LIVE_COMMAND_TYPES)[number];
@@ -72,6 +76,7 @@ export type LiveCapabilityType =
   | 'recording'
   | 'state'
   | 'auth'
+  | 'view'
   | 'debug';
 
 const CAPABILITY_BY_NAMESPACE: Readonly<Record<string, LiveCapabilityType>> = {
@@ -84,6 +89,7 @@ const CAPABILITY_BY_NAMESPACE: Readonly<Record<string, LiveCapabilityType>> = {
   state: 'state',
   recording: 'recording',
   auth: 'auth',
+  view: 'view',
   debug: 'debug',
 };
 
@@ -176,6 +182,31 @@ export interface RegistryDecisionPayload {
 
 export interface StepExecutePayload {
   readonly stepId: string;
+}
+
+/**
+ * Starts streaming the page as frames (`browser.frame` events).
+ *
+ * The counterpart to `state.snapshot`, which answers one request with one
+ * picture. A stream is what makes the live view actually live: frames arrive
+ * when the page repaints rather than when a client remembers to ask, and
+ * between asks a snapshot-based preview is silently out of date.
+ *
+ * Frames arrive as events, not as this command's result — the command only
+ * turns the stream on.
+ */
+export interface ViewStartPayload {
+  /** JPEG suits a stream of photographic deltas; PNG suits a single still. */
+  readonly format?: 'png' | 'jpeg';
+  readonly quality?: number;
+  /**
+   * Emit only every Nth frame the engine produces.
+   *
+   * A browser repaints up to 60 times a second and nothing downstream benefits
+   * from that, so thinning at the source is cheaper than paying for frames a
+   * client will drop.
+   */
+  readonly everyNthFrame?: number;
 }
 
 export interface StateSnapshotPayload {
@@ -305,6 +336,9 @@ export interface LiveCommandPayloadMap {
   'recording.start': RecordingStartPayload;
   'recording.observe': RecordingObservePayload;
   'recording.stop': Record<string, never>;
+
+  'view.start': ViewStartPayload;
+  'view.stop': Record<string, never>;
 }
 
 export interface LiveSessionCommand<T extends LiveCommandType = LiveCommandType> {

@@ -106,6 +106,10 @@ interface LiveSessionState {
    * panel is configured once instead of scoped by hand on every scan.
    */
   scanRoot: string;
+  /** True while the frame refreshes on a timer rather than on demand. */
+  following: boolean;
+  /** True while the worker pushes frames as they are painted. */
+  streaming: boolean;
   scan: ScanProgress | undefined;
   scanned: ScannedElement[] | undefined;
   error: string | undefined;
@@ -128,6 +132,10 @@ interface LiveSessionState {
   clearRegion(): void;
   /** Sets the scan root and remembers it for the current page's host. */
   setScanRoot(selector: string): void;
+  /** Starts or stops refreshing the frame on a timer. */
+  toggleFollow(): void;
+  /** Starts or stops the worker's frame stream. */
+  toggleStream(): void;
   /** Lists every element on the page, then describes each to rank selectors. */
   scanAll(): Promise<void>;
   /** Describes only the elements sitting inside the drawn region. */
@@ -151,6 +159,35 @@ const pending = new Map<string, (result: unknown | undefined) => void>();
 
 /** Set while a scan runs, so a cancel can stop the loop between describes. */
 let scanToken: symbol | undefined;
+
+/**
+ * The auto-refresh loop.
+ *
+ * Held at module level beside the socket, for the same reason: it belongs to
+ * the session rather than to a component, and a timer that outlived the view
+ * that started it would keep driving a browser nobody is watching.
+ */
+let followTimer: number | undefined;
+
+/**
+ * Whether a snapshot is still outstanding.
+ *
+ * `refreshSnapshot` is fire-and-forget — it does not go through `sendAwaiting`
+ * — so the loop cannot await its own request. Without this flag a page slower
+ * than the interval queues snapshots faster than the worker answers them, and
+ * the browser spends all its time screenshotting.
+ */
+let snapshotInFlight = false;
+
+/**
+ * How often the frame is refreshed while following.
+ *
+ * A snapshot costs the worker 20-50ms, so this is not a cost problem; it is a
+ * *courtesy* problem. Faster buys little — the eye cannot use 10fps of a
+ * still-image preview — and it drives a real browser continuously, so the loop
+ * is also stopped whenever the tab is hidden.
+ */
+const FOLLOW_INTERVAL_MS = 350;
 
 /** A described element is worth waiting for, but not forever. */
 const DESCRIBE_TIMEOUT_MS = 10_000;
@@ -213,6 +250,8 @@ export const useLiveSessionStore = create<LiveSessionState>((set, get) => ({
   selectingRegion: false,
   region: undefined,
   scanRoot: '',
+  following: false,
+  streaming: false,
   scan: undefined,
   scanned: undefined,
   error: undefined,
@@ -256,6 +295,11 @@ export const useLiveSessionStore = create<LiveSessionState>((set, get) => ({
     for (const resolve of pending.values()) resolve(undefined);
     pending.clear();
 
+    // The timer holds no reference to the session, so it would happily keep
+    // asking a closed socket for frames.
+    stopFollowing();
+    snapshotInFlight = false;
+
     socket?.close();
     socket = undefined;
 
@@ -273,6 +317,8 @@ export const useLiveSessionStore = create<LiveSessionState>((set, get) => ({
       scanned: undefined,
       selectingRegion: false,
       region: undefined,
+      following: false,
+      streaming: false,
     });
   },
 
@@ -346,7 +392,97 @@ export const useLiveSessionStore = create<LiveSessionState>((set, get) => ({
       },
     });
 
-    if (!sent) set({ error: 'The live socket is not connected.' });
+    if (sent) snapshotInFlight = true;
+    else set({ error: 'The live socket is not connected.' });
+  },
+
+  /**
+   * Follows the page: refreshes the frame on a timer instead of on demand.
+   *
+   * The preview was a still image that only changed when someone pressed
+   * Refresh, so a page that moved on its own — or moved because of a command —
+   * left a picture that was quietly out of date. This is not a video stream and
+   * does not pretend to be one; it is the same snapshot command on a timer,
+   * which is enough for the frame to stop lying about the page.
+   *
+   * Off by default: it drives a real browser for as long as it runs.
+   */
+  toggleFollow() {
+    const next = !get().following;
+    set({ following: next });
+
+    stopFollowing();
+    if (!next) return;
+
+    followTimer = window.setInterval(() => {
+      const state = get();
+
+      // Nothing to follow, or the session went away under us.
+      if (state.session === undefined || socket === undefined) {
+        stopFollowing();
+        set({ following: false });
+        return;
+      }
+
+      // A hidden tab is not being watched, and a scan already drives the
+      // browser hard enough without a timer competing for it.
+      if (document.hidden || state.scan?.running === true) return;
+
+      // Skipped rather than queued: a page slower than the interval would
+      // otherwise accumulate snapshots the worker answers long after they
+      // stopped being current.
+      if (snapshotInFlight) return;
+
+      get().refreshSnapshot();
+    }, FOLLOW_INTERVAL_MS);
+
+    // One immediately, so pressing the button shows its effect now rather
+    // than after the first interval.
+    get().refreshSnapshot();
+  },
+
+  /**
+   * Streams the page instead of asking for it.
+   *
+   * The worker turns the engine's own screencast on and publishes each frame,
+   * so the picture follows repaints rather than a timer. Following is switched
+   * off when this starts: two sources updating one image would race, and the
+   * poll would be pure waste behind a stream that is already faster.
+   *
+   * When the Runner has no cross-process event bus the command fails with
+   * CAPABILITY_NOT_IMPLEMENTED naming what is missing, which the panel shows —
+   * and following remains the fallback that works everywhere.
+   */
+  toggleStream() {
+    const { session, streaming, following } = get();
+    if (session === undefined || socket === undefined) {
+      set({ error: 'Start a live session before streaming.' });
+      return;
+    }
+
+    const next = !streaming;
+
+    if (next && following) {
+      // Stops the timer, not just the flag.
+      get().toggleFollow();
+    }
+
+    const sent = socket.send({
+      id: `cmd_${Date.now().toString(36)}`,
+      sessionId: session.id,
+      type: next ? 'view.start' : 'view.stop',
+      payload: next ? { format: 'jpeg', quality: 60, everyNthFrame: 2 } : {},
+    });
+
+    if (!sent) {
+      set({ error: 'The live socket is not connected.' });
+      return;
+    }
+
+    // Optimistic, and corrected by the command result: a refused `view.start`
+    // sets `error`, and leaving the button lit would claim a stream that is
+    // not running.
+    set({ streaming: next });
   },
 
   toggleCandidates() {
@@ -759,15 +895,46 @@ function handleMessage(
   };
 
   switch (message.kind) {
-    case 'event':
+    case 'event': {
+      /*
+       * A streamed frame updates the picture and is never logged.
+       *
+       * Frames arrive tens of times a second and each carries a base64 image:
+       * appending them would bury every other entry within a second and hold
+       * megabytes of screenshots in the log array. They are also the one event
+       * with a *rendering* job rather than an informational one.
+       */
+      if (message.event.type === 'browser.frame') {
+        const frame = message.event.payload as LiveStateSnapshot['frame'];
+        if (frame !== undefined) {
+          const previous = get().snapshot;
+          set({
+            snapshot:
+              previous === undefined
+                ? // A frame before any snapshot still deserves to be shown; the
+                  // URL fills in on the next state result.
+                  ({ url: '', frameCount: 1, hasOpenDialog: false, capturedAt: frame.capturedAt, frame } as LiveStateSnapshot)
+                : { ...previous, frame },
+          });
+        }
+        break;
+      }
+
       append({
         kind: 'event',
         label: message.event.type,
         detail: JSON.stringify(message.event.payload).slice(0, 200),
       });
       break;
+    }
 
     case 'command-result': {
+      // Any result clears the in-flight marker. Keyed on nothing in
+      // particular on purpose: the follow loop only needs to know that the
+      // socket is answering again, and tracking snapshot ids separately would
+      // strand the flag forever on a result that never arrives.
+      snapshotInFlight = false;
+
       // Settle an awaiting caller first, and before the early returns below:
       // a scan step that never learns its command failed would stall until its
       // timeout, turning one bad element into a ten-second pause.
@@ -859,6 +1026,12 @@ function handleMessage(
       append({ kind: 'error', label: message.code, detail: message.message });
       break;
   }
+}
+
+/** Clears the follow timer, if one is running. */
+function stopFollowing(): void {
+  if (followTimer !== undefined) window.clearInterval(followTimer);
+  followTimer = undefined;
 }
 
 function isPreviewResult(value: unknown): value is SelectorPreviewResult {

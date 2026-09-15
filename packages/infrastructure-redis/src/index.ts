@@ -1,3 +1,4 @@
+export * from './redis-event-bus.js';
 export * from './redis-execution-store.js';
 export * from './redis-inspection-store.js';
 export * from './redis-live-command-transport.js';

@@ -65,6 +65,33 @@ export interface ScreenshotOptions {
   readonly quality?: number;
 }
 
+export interface ScreencastOptions {
+  /**
+   * JPEG by default, and deliberately: a stream's frames are mostly
+   * photographic deltas of the same page, where JPEG is both smaller and
+   * faster to encode. PNG remains right for a single still of flat UI.
+   */
+  readonly format?: 'png' | 'jpeg';
+  readonly quality?: number;
+  /**
+   * Emit only every Nth frame the engine produces.
+   *
+   * The engine can repaint at 60fps; nothing downstream benefits from that, and
+   * every frame costs an encode plus a socket message. Thinning at the source
+   * is cheaper than dropping frames after they have been paid for.
+   */
+  readonly everyNthFrame?: number;
+}
+
+export interface ScreencastFrame {
+  readonly format: 'png' | 'jpeg';
+  /** Base64-encoded image data, ready to put in a data URL. */
+  readonly data: string;
+  readonly width: number;
+  readonly height: number;
+  readonly capturedAt: string;
+}
+
 /**
  * One browser context, already authenticated where a profile applies.
  * Obtained from BrowserManagerPort; never constructed directly.
@@ -148,6 +175,33 @@ export interface BrowserPort {
   seedOriginStorage(input: OriginStorageSeed): Promise<Result<void>>;
 
   screenshot(options?: ScreenshotOptions): Promise<Result<Buffer>>;
+
+  /**
+   * Streams the viewport as frames until stopped.
+   *
+   * The live view's other half. A screenshot per request tops out at a few
+   * frames a second once each one has crossed a socket, and between requests
+   * the picture is silently out of date — so a preview built on it reads as
+   * frozen rather than live. A stream pushes instead: the engine emits a frame
+   * when the page actually repaints.
+   *
+   * Behind a port because the engine's mechanism is not the application's
+   * business: this is Chrome DevTools screencast today and could be WebRTC
+   * later without anything above the port knowing. That is the seam the state
+   * capability's comment has been anticipating.
+   *
+   * `onFrame` is called with an already-encoded image. Implementations are
+   * expected to acknowledge each frame to the engine before requesting the
+   * next, so a slow consumer slows the stream rather than queueing frames
+   * without limit.
+   */
+  startScreencast(
+    onFrame: (frame: ScreencastFrame) => void,
+    options?: ScreencastOptions,
+  ): Promise<Result<void>>;
+
+  /** Stops a stream started by `startScreencast`. Safe to call when idle. */
+  stopScreencast(): Promise<Result<void>>;
 
   /** Draws a transient overlay for the live workspace. */
   highlight(selector: ScopedSelector, durationMs?: number): Promise<Result<void>>;

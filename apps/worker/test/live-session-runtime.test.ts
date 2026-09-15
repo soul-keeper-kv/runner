@@ -41,7 +41,12 @@ function fakeBrowsers() {
   const manager: BrowserManagerPort = {
     acquire: async () => {
       acquisitions += 1;
-      return ok({ sessionId: `bs_${acquisitions}` } as unknown as BrowserPort);
+      return ok({
+        sessionId: `bs_${acquisitions}`,
+        // The runtime stops a stream before releasing a context; a fake without
+        // it would let that call go untested.
+        stopScreencast: async () => ok(undefined),
+      } as unknown as BrowserPort);
     },
     release: async (sessionId: string) => {
       released.push(sessionId);

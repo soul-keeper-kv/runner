@@ -1,6 +1,7 @@
 import { Redis } from 'ioredis';
 import type {
   AuthProfileStorePort,
+  EventBusPort,
   ExecutionQueuePort,
   ExecutionStorePort,
   InspectionQueuePort,
@@ -16,6 +17,7 @@ import {
   createPostgresClient,
 } from '@runner/infrastructure-postgres';
 import {
+  RedisEventBus,
   RedisExecutionStore,
   RedisInspectionStore,
   RedisLiveCommandTransport,
@@ -64,6 +66,11 @@ export interface ApiContainer {
   readonly sessionStore: SessionStorePort;
   /** Undefined when no Redis is configured: live commands need the worker. */
   readonly liveCommands: LiveCommandTransportPort | undefined;
+  /**
+   * Live events flowing worker → API, so a socket can relay streamed frames.
+   * Undefined without Redis, in which case the view falls back to snapshots.
+   */
+  readonly liveEvents: EventBusPort | undefined;
   readonly executionQueue: ExecutionQueuePort;
   readonly inspectionQueue: InspectionQueuePort;
   shutdown(): Promise<void>;
@@ -114,6 +121,12 @@ export function createContainer(config: ApiConfig): ApiContainer {
   // out against a worker that was never there.
   const liveCommands: LiveCommandTransportPort | undefined =
     redis === undefined ? undefined : new RedisLiveCommandTransport(config.redisUrl, logger);
+
+  // Events travel the other way: the worker publishes, a socket subscribes. It
+  // exists only alongside Redis for the same reason live commands do — without
+  // the worker there is nothing producing them.
+  const liveEvents: (EventBusPort & { close(): Promise<void> }) | undefined =
+    redis === undefined ? undefined : new RedisEventBus(config.redisUrl, logger);
 
   /*
    * The Registry's system of record is Postgres.
@@ -189,12 +202,14 @@ export function createContainer(config: ApiConfig): ApiContainer {
     authProfileStore,
     sessionStore,
     liveCommands,
+    liveEvents,
     executionQueue,
     inspectionQueue,
     async shutdown() {
       await executionQueue.close();
       await inspectionQueue.close();
       await liveCommands?.close();
+      await liveEvents?.close();
       await postgres?.end();
       redis?.disconnect();
     },

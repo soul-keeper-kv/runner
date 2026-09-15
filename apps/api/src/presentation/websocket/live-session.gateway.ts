@@ -51,7 +51,17 @@ export function registerLiveSessionGateway(app: FastifyInstance, container: ApiC
         void handleMessage(socket, container, sessionId, raw);
       });
 
+      /*
+       * Events flow the other way from commands: the worker publishes, this
+       * socket relays. Held here so the close handler can detach it — a
+       * subscription that outlived its socket would keep receiving a streamed
+       * frame every 20ms and write it to a closed connection.
+       */
+      let eventSubscription: { unsubscribe(): void } | undefined;
+
       socket.on('close', () => {
+        eventSubscription?.unsubscribe();
+        eventSubscription = undefined;
         logger.info('Live session socket disconnected');
       });
 
@@ -72,6 +82,22 @@ export function registerLiveSessionGateway(app: FastifyInstance, container: ApiC
         }
 
         logger.info('Live session socket connected');
+
+        /*
+         * Subscribed before the first command is drained, so a stream started
+         * by an early `view.start` cannot emit frames into a socket that is
+         * not listening yet.
+         *
+         * Relayed verbatim and without validation: these are the Runner's own
+         * events, and re-checking them here would only add a place for the two
+         * definitions to disagree.
+         */
+        eventSubscription = container.liveEvents?.subscribeSession(sessionId, (event) => {
+          // A closed socket still holds a live subscription for an instant
+          // while `close` propagates; writing to it would throw.
+          if (socket.readyState !== 1) return;
+          send(socket, { kind: 'event', event });
+        });
 
         send(socket, {
           kind: 'event',

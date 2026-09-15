@@ -2,6 +2,7 @@ import type { BrowserPort } from '@runner/application';
 import type {
   LiveCapabilityType,
   LiveCommandType,
+  LiveEventType,
   LiveSession,
   RawLiveCommand,
 } from '@runner/live-protocol';
@@ -26,6 +27,17 @@ export interface LiveSessionContext {
   readonly session: LiveSession;
   readonly browser: BrowserPort;
   readonly logger: Logger;
+  /**
+   * Publishes an event for this session, reaching whoever is subscribed.
+   *
+   * Threaded through the context for the same reason as `patchSession`: the
+   * runtime owns the bus, so a capability that reached for one directly would
+   * need its own wiring and could publish for a session it was not handling.
+   *
+   * Absent when no cross-process bus is configured, in which case a capability
+   * that streams says so rather than streaming into nothing.
+   */
+  publishEvent?(event: { readonly type: LiveEventType; readonly payload: unknown }): void;
   /**
    * Records what a capability changed about the session itself.
    *

@@ -1,6 +1,11 @@
-import type { BrowserManagerPort, BrowserPort, SessionStorePort } from '@runner/application';
+import type {
+  BrowserManagerPort,
+  BrowserPort,
+  EventBusPort,
+  SessionStorePort,
+} from '@runner/application';
 import type { LiveCommandResult, LiveSession, RawLiveCommand } from '@runner/live-protocol';
-import { ok, type Clock, type Logger, type Result } from '@runner/shared';
+import { newEventId, ok, type Clock, type Logger, type Result } from '@runner/shared';
 import type { CapabilityRegistry, LiveSessionContext } from '../../capabilities/capability-registry.js';
 import type { AuthService } from '../auth/auth-service.js';
 
@@ -30,7 +35,19 @@ export interface LiveSessionRuntimeOptions {
 export const DEFAULT_LIVE_RUNTIME_OPTIONS: LiveSessionRuntimeOptions = {
   headless: true,
   viewport: { width: 1280, height: 720 },
-  defaultTimeoutMs: 15_000,
+  /*
+   * Deliberately shorter than an execution's timeout.
+   *
+   * A live command holds a user's attention: an unreachable page spent 15s
+   * before reporting PAGE_NOT_REACHABLE, and the snapshot behind it spent
+   * another 15s failing to capture a frame, so the preview froze for half a
+   * minute with nothing on screen explaining why. Answering in 8s is worth
+   * more here than waiting out a page that is probably not coming.
+   *
+   * Execution and auth keep their own 15s: a real test step waits on slow
+   * application behaviour that a person watching a preview would not.
+   */
+  defaultTimeoutMs: 8_000,
   idleTimeoutMs: 30 * 60 * 1000,
 };
 
@@ -59,6 +76,13 @@ export class LiveSessionRuntime {
      * that names a profile opens unauthenticated and says so.
      */
     private readonly auth?: AuthService,
+    /**
+     * Carries events out of this process, so a streamed frame can reach the
+     * API's socket. Absent when nothing cross-process is configured, in which
+     * case a capability that streams refuses rather than streaming into a bus
+     * only this process can hear.
+     */
+    private readonly events?: EventBusPort,
   ) {}
 
   /**
@@ -111,6 +135,8 @@ export class LiveSessionRuntime {
     // that advances the revision, so there is a single writer.
     let sessionPatch: Partial<Pick<LiveSession, 'authenticatedAs'>> | undefined;
 
+    const events = this.events;
+
     const context: LiveSessionContext = {
       session: live,
       browser: browser.value,
@@ -118,6 +144,32 @@ export class LiveSessionRuntime {
       patchSession: (patch) => {
         sessionPatch = { ...sessionPatch, ...patch };
       },
+      ...(events === undefined
+        ? {}
+        : {
+            publishEvent: (event) => {
+              /*
+               * Fire-and-forget on purpose.
+               *
+               * A frame arrives from the engine's callback, not from a command,
+               * so there is nobody to await it — and a stream that waited for
+               * each publish would let Redis latency set the frame rate. A
+               * dropped frame costs one repaint; a stalled stream costs the
+               * feature.
+               */
+              void events.publish({
+                id: newEventId(),
+                sessionId: command.sessionId,
+                type: event.type,
+                // Frames are a stream, not a log: a client that misses one
+                // wants the next, never a replay, so there is no per-session
+                // counter to keep here.
+                sequence: 0,
+                timestamp: this.clock.nowIso(),
+                payload: event.payload,
+              });
+            },
+          }),
     };
 
     const dispatched = await this.capabilities.dispatch(command, context);
@@ -154,6 +206,21 @@ export class LiveSessionRuntime {
     if (session === undefined) return;
 
     this.held.delete(sessionId);
+
+    /*
+     * Before the context goes: a screencast left running would keep Chrome
+     * producing frames for a session nobody can watch, and the detach would
+     * then race the context teardown.
+     *
+     * Guarded rather than called outright. Releasing a browser must not depend
+     * on how new its adapter is — a BrowserPort built before streaming existed
+     * throws a TypeError here, and losing a browser context because it could
+     * not be asked to stop a stream it never started would be a bad trade.
+     */
+    if (typeof session.browser.stopScreencast === 'function') {
+      await Promise.resolve(session.browser.stopScreencast()).catch(() => undefined);
+    }
+
     await this.browsers.release(session.browser.sessionId);
     this.logger.info('Live session browser released', { sessionId });
   }
