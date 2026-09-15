@@ -67,6 +67,11 @@
           "type": "boolean",
           "default": false,
           "description": "Also report links, tabs and menu items, not only fields to fill in."
+        },
+        "rootSelector": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Inspect only inside this container, as a CSS selector. For an application that renders everything into one panel, so the result excludes the surrounding shell. It names where to look and never becomes a target, so Test IR still carries no selectors. The element cap applies inside the container, so a panel on a long page keeps its elements. A selector matching nothing fails with ELEMENT_NOT_FOUND naming it, rather than silently inspecting the whole page."
         }
       }
     }

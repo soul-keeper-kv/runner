@@ -86,7 +86,10 @@ export async function runInspection(
       await new Promise((resolve) => setTimeout(resolve, options.waitForMs));
     }
 
-    const snapshot = await deps.inspector.inspect(browser, { interactableOnly: true });
+    const snapshot = await deps.inspector.inspect(browser, {
+      interactableOnly: true,
+      ...(options.rootSelector === undefined ? {} : { rootSelector: options.rootSelector }),
+    });
     if (!snapshot.ok) {
       await fail(deps, record.inspectionId, snapshot.error);
       return snapshot;

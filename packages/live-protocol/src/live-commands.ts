@@ -181,6 +181,17 @@ export interface StepExecutePayload {
 export interface StateSnapshotPayload {
   readonly includeScreenshot?: boolean;
   readonly includeCandidates?: boolean;
+  /**
+   * Inspect only inside this container, as a raw CSS selector.
+   *
+   * Names where to look, never what to act on, so it does not become a target
+   * and never reaches the Registry — the one narrow exception to selectors
+   * being structured data. A workspace sets it once for an application whose
+   * content always lives in the same panel, instead of scoping every scan by
+   * hand. Matching nothing is an error naming the selector, not a quiet scan
+   * of the whole page.
+   */
+  readonly rootSelector?: string;
 }
 
 /**

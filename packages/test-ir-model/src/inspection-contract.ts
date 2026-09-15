@@ -37,6 +37,20 @@ export interface InspectionOptionsV1 {
    * Off by default: the common request is "what do I have to fill in?".
    */
   readonly includeNonInputControls?: boolean;
+  /**
+   * Inspect only inside this container, as a raw CSS selector.
+   *
+   * For an application that renders everything into one panel, so a caller
+   * stops receiving the shell — navigation, header, footer — around the part it
+   * asked about. It names *where to look* and never becomes a target, so Test
+   * IR still carries no selectors.
+   *
+   * Because the scan is rooted rather than filtered afterwards, the element cap
+   * applies inside the container: a panel on a long page keeps its elements.
+   * A selector matching nothing fails with ELEMENT_NOT_FOUND naming it, rather
+   * than returning the whole page to a caller who believes it scoped the scan.
+   */
+  readonly rootSelector?: string;
 }
 
 export interface InspectionRequestV1 {

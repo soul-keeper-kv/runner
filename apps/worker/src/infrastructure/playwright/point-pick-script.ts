@@ -170,8 +170,12 @@ export function describeAtPointScript(point: { x: number; y: number }): PointPic
       width: Math.round(rect.width),
       height: Math.round(rect.height),
     },
-    // Document order, so a picked element lines up with the runtimeIds a page
-    // snapshot produced for the same page.
+    // Document order. Deliberately *not* comparable to a snapshot's
+    // runtimeIds: the inspector numbers the elements that pass its filter, and
+    // it can be rooted at a container, so the two counters are unrelated. Where
+    // something needs to know whether a describe landed on the element that was
+    // scanned, it compares geometry — see `describeLandedElsewhere` in the
+    // workspace's registry export.
     domIndex: Array.from(document.querySelectorAll('*')).indexOf(element),
   };
 

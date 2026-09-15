@@ -74,6 +74,27 @@ describe('inspection request schema', () => {
     expect(registry.validate(SCHEMA_IDS.inspectionRequest, request).ok).toBe(true);
   });
 
+  /*
+   * A root selector is the one place a caller supplies raw CSS, so the contract
+   * says what it is for: naming where to look, never what to act on. It stays
+   * out of Test IR, which is why it lives in inspection options and not in a
+   * step.
+   */
+  it('accepts a root selector that scopes the scan to one container', () => {
+    const request = {
+      ...validRequest(),
+      options: { rootSelector: '#caris-tab-panel-tab-1789465464622' },
+    };
+    expect(registry.validate(SCHEMA_IDS.inspectionRequest, request).ok).toBe(true);
+  });
+
+  it('rejects an empty root selector rather than scanning the whole page', () => {
+    // Indistinguishable from 'no root' once trimmed, and a caller who sent one
+    // believes the scan was scoped.
+    const request = { ...validRequest(), options: { rootSelector: '' } };
+    expect(registry.validate(SCHEMA_IDS.inspectionRequest, request).ok).toBe(false);
+  });
+
   it('rejects an unknown wait strategy', () => {
     const request = { ...validRequest(), options: { waitUntil: 'whenever' } };
     expect(registry.validate(SCHEMA_IDS.inspectionRequest, request).ok).toBe(false);

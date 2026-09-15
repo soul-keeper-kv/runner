@@ -43,6 +43,8 @@ export function LivePreview(): JSX.Element {
   const cancelScan = useLiveSessionStore((state) => state.cancelScan);
   const downloadRegistry = useLiveSessionStore((state) => state.downloadRegistry);
   const error = useLiveSessionStore((state) => state.error);
+  const scanRoot = useLiveSessionStore((state) => state.scanRoot);
+  const setScanRoot = useLiveSessionStore((state) => state.setScanRoot);
 
   /** The rectangle being dragged right now, in viewport coordinates. */
   const [dragRect, setDragRect] = useState<ViewportRect | undefined>(undefined);
@@ -151,6 +153,31 @@ export function LivePreview(): JSX.Element {
           </button>
         </div>
       </header>
+
+      {/*
+        The scan root, remembered per host.
+
+        The region beside it answers "this part, once"; this answers "this
+        application always renders into that panel". It is applied in the
+        browser rather than filtered afterwards, so the candidate cap is spent
+        inside the container — which is why it reaches elements a region on a
+        long page never sees.
+      */}
+      <div className="field">
+        <label htmlFor="scan-root">Scan root (optional)</label>
+        <input
+          id="scan-root"
+          value={scanRoot}
+          placeholder="#caris-tab-panel-tab-1789465464622"
+          onChange={(event) => setScanRoot(event.target.value)}
+        />
+        <span className="muted">
+          A CSS selector for the container that holds everything worth
+          inspecting. Remembered for {hostLabel(snapshot?.url) ?? 'this site'}, so it
+          applies to every later scan. Empty scans the whole page; a selector
+          matching nothing fails and says so.
+        </span>
+      </div>
 
       {scan !== undefined && (
         <div className="scan-progress">
@@ -507,6 +534,16 @@ function rectBetween(
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
+}
+
+/** The host a remembered setting belongs to, for the caption. */
+function hostLabel(url: string | undefined): string | undefined {
+  if (url === undefined || url.length === 0) return undefined;
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return undefined;
+  }
 }
 
 function boxStyle(

@@ -94,7 +94,21 @@ export class PlaywrightBrowserAdapter implements BrowserPort {
       const raw = (await this.page.evaluate(inspectPageScript, {
         interactableOnly: options.interactableOnly ?? true,
         maxElements: options.maxElements ?? 500,
+        ...(options.rootSelector === undefined ? {} : { rootSelector: options.rootSelector }),
       })) as RawSnapshot;
+
+      // A root that matches nothing fails loudly. Returning an empty snapshot
+      // would read as "this container is empty", and falling back to the
+      // document would hand back the whole page to a caller who asked for one
+      // panel — the worse of the two, because nothing in the result says so.
+      if (raw.rootMissing === true) {
+        return err(
+          RunnerErrors.elementNotFound(`inspection root ${options.rootSelector ?? ''}`, {
+            rootSelector: options.rootSelector,
+            url: raw.url,
+          }),
+        );
+      }
 
       const frames =
         options.includeFrames === true

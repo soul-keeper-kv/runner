@@ -39,6 +39,24 @@ export interface InspectOptions {
   readonly interactableOnly?: boolean;
   readonly includeFrames?: boolean;
   readonly maxElements?: number;
+  /**
+   * Inspect only inside this container, given as a raw CSS selector.
+   *
+   * The one place in the Runner where a caller supplies a CSS selector, and it
+   * is deliberate: this names *where to look*, not which element to act on, so
+   * it never becomes a target and never reaches the Registry. Blueprint rule 4
+   * still holds for everything downstream — the selectors this returns are
+   * generated structured data, as before.
+   *
+   * Scoping here rather than filtering afterwards is what makes it worth
+   * having: `maxElements` then applies within the container, so a panel on a
+   * long page cannot lose its elements to a cap spent on the page around it.
+   *
+   * A selector matching nothing is an error, never a silent fall back to the
+   * whole document: a caller that believes it scoped the scan would otherwise
+   * receive the entire page and have no way to tell.
+   */
+  readonly rootSelector?: string;
 }
 
 export interface ScreenshotOptions {

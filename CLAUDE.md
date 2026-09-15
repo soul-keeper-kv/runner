@@ -132,10 +132,23 @@ Element Registry (reads, draft-then-commit writes, revisions) behind
 — and the live view: `state.snapshot` returns a frame plus the bounding boxes the
 workspace draws highlights from.
 
-A scan can be scoped to a region the user drags on the frame. That is entirely a
-workspace concern — the region filters the boxes `state.inspect` already
-reported, so no command carries it and the worker's inspector stays
-document-rooted. Only the describe loop narrows, which is where the cost is
+A scan can be scoped two ways, and the difference is where the scoping happens.
+
+`rootSelector` roots the inspector itself: `InspectOptions.rootSelector` reaches
+`dom-inspector-script.ts`, which traverses from `document.querySelector(root)`
+instead of `document`. That is the one place a caller supplies raw CSS, and it
+stays within rule 4 because it names *where to look*, never what to act on — it
+never becomes a target and never reaches the Registry. Rooting rather than
+filtering is the whole point: `maxElements` then applies inside the container,
+so a panel on a long page cannot lose its elements to a cap spent on the shell
+around it. A root matching nothing fails with `ELEMENT_NOT_FOUND` naming it,
+because a caller who believes the scan was scoped must never silently receive
+the whole page. It is offered on `POST /inspections` and on `state.snapshot` /
+`state.inspect`; the workspace remembers one per host in `localStorage`.
+
+A region, by contrast, is entirely a workspace concern — it filters the boxes
+`state.inspect` already reported, so no command carries it and the worker's
+inspector is untouched. Only the describe loop narrows, which is where the cost is
 (one round trip per element). `containedInRegion` requires an element to sit
 *fully* inside: an intersection test would keep every ancestor overlapping the
 rectangle — `<body>`, the page wrapper — which is the hand-editing the region

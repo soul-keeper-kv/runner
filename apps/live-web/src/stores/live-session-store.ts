@@ -99,6 +99,13 @@ interface LiveSessionState {
   selectingRegion: boolean;
   /** The region the user drew, in page viewport coordinates. */
   region: ViewportRect | undefined;
+  /**
+   * CSS selector for the container every scan is rooted at.
+   *
+   * Remembered per host, so an application that renders everything into one
+   * panel is configured once instead of scoped by hand on every scan.
+   */
+  scanRoot: string;
   scan: ScanProgress | undefined;
   scanned: ScannedElement[] | undefined;
   error: string | undefined;
@@ -119,6 +126,8 @@ interface LiveSessionState {
   /** Records a region the user drew, in page viewport coordinates. */
   setRegion(region: ViewportRect): void;
   clearRegion(): void;
+  /** Sets the scan root and remembers it for the current page's host. */
+  setScanRoot(selector: string): void;
   /** Lists every element on the page, then describes each to rank selectors. */
   scanAll(): Promise<void>;
   /** Describes only the elements sitting inside the drawn region. */
@@ -147,6 +156,40 @@ let scanToken: symbol | undefined;
 const DESCRIBE_TIMEOUT_MS = 10_000;
 
 /**
+ * Where a host's scan root is remembered.
+ *
+ * Per host rather than one global value: the selector is a fact about one
+ * application's layout, and a single setting would silently scope a scan of the
+ * next site to a panel that does not exist there — which now fails loudly, but
+ * still wastes the user's time.
+ *
+ * localStorage rather than the Registry: this is a workspace convenience, and
+ * putting it in the Registry would mean a migration, a route and a draft
+ * modification (blueprint rule 7) for a text box.
+ */
+const SCAN_ROOT_PREFIX = 'runner.scanRoot.';
+
+function hostOf(url: string | undefined): string | undefined {
+  if (url === undefined || url.length === 0) return undefined;
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return undefined;
+  }
+}
+
+function loadScanRoot(url: string | undefined): string {
+  const host = hostOf(url);
+  if (host === undefined) return '';
+  try {
+    return window.localStorage.getItem(`${SCAN_ROOT_PREFIX}${host}`) ?? '';
+  } catch {
+    // A private window or blocked site data must not break scanning.
+    return '';
+  }
+}
+
+/**
  * Below this, in viewport pixels, a drag is treated as a stray click.
  *
  * A region has to be drawn over a screenshot, and a plain click on the frame
@@ -169,6 +212,7 @@ export const useLiveSessionStore = create<LiveSessionState>((set, get) => ({
   picked: undefined,
   selectingRegion: false,
   region: undefined,
+  scanRoot: '',
   scan: undefined,
   scanned: undefined,
   error: undefined,
@@ -288,14 +332,18 @@ export const useLiveSessionStore = create<LiveSessionState>((set, get) => ({
   },
 
   refreshSnapshot() {
-    const { session, showCandidates } = get();
+    const { session, showCandidates, scanRoot } = get();
     if (session === undefined || socket === undefined) return;
 
     const sent = socket.send({
       id: `cmd_${Date.now().toString(36)}`,
       sessionId: session.id,
       type: 'state.snapshot',
-      payload: { includeScreenshot: true, includeCandidates: showCandidates },
+      payload: {
+        includeScreenshot: true,
+        includeCandidates: showCandidates,
+        ...(scanRoot.length === 0 ? {} : { rootSelector: scanRoot }),
+      },
     });
 
     if (!sent) set({ error: 'The live socket is not connected.' });
@@ -366,6 +414,26 @@ export const useLiveSessionStore = create<LiveSessionState>((set, get) => ({
 
   clearRegion() {
     set({ region: undefined, selectingRegion: false });
+  },
+
+  setScanRoot(selector: string) {
+    const trimmed = selector.trim();
+    set({ scanRoot: trimmed });
+
+    // Persisted against the page currently open, so the value comes back the
+    // next time this application is inspected. An empty box removes the entry
+    // rather than storing '' — otherwise "I cleared it" and "I never set one"
+    // would look different in storage while meaning the same thing.
+    const host = hostOf(get().snapshot?.url);
+    if (host === undefined) return;
+
+    try {
+      const key = `${SCAN_ROOT_PREFIX}${host}`;
+      if (trimmed.length === 0) window.localStorage.removeItem(key);
+      else window.localStorage.setItem(key, trimmed);
+    } catch {
+      // Storage being unavailable costs the user the memory, not the scan.
+    }
   },
 
   pickAt(x: number, y: number) {
@@ -516,9 +584,14 @@ async function runScan(
     error: undefined,
   });
 
+  const scanRoot = get().scanRoot;
   const listed = await sendAwaiting(session.id, 'state.inspect', {
     includeScreenshot: false,
     includeCandidates: true,
+    // Rooted in the browser, so the candidate cap is spent inside the
+    // container rather than on the shell around it. A region, by contrast,
+    // filters boxes that were already returned.
+    ...(scanRoot.length === 0 ? {} : { rootSelector: scanRoot }),
   });
 
   if (scanToken !== token) return;
@@ -741,8 +814,15 @@ function handleMessage(
                 ? { ...snapshotResult, frame: previous.frame }
                 : snapshotResult,
           });
-        }
-        else if (pickedResult !== undefined) set({ picked: pickedResult });
+
+          // Restore this host's remembered root the first time a page from it
+          // appears. Only when the box is empty, so it never overwrites what
+          // the user is currently typing.
+          if (get().scanRoot.length === 0) {
+            const remembered = loadScanRoot(snapshotResult.url);
+            if (remembered.length > 0) set({ scanRoot: remembered });
+          }
+        } else if (pickedResult !== undefined) set({ picked: pickedResult });
         else if (isPreviewResult(message.result.result)) {
           set({ lastPreview: message.result.result });
         }

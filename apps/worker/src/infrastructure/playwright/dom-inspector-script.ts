@@ -41,11 +41,15 @@ export interface RawSnapshot {
   elements: RawCandidate[];
   domFingerprint: string;
   totalNodesScanned: number;
+  /** Set when `rootSelector` matched nothing, so the caller can say which. */
+  rootMissing?: boolean;
 }
 
 export interface InspectScriptOptions {
   interactableOnly: boolean;
   maxElements: number;
+  /** CSS selector for the container to inspect inside; absent means the document. */
+  rootSelector?: string;
 }
 
 /**
@@ -280,9 +284,37 @@ export function inspectPageScript(options: InspectScriptOptions): RawSnapshot {
     return Object.keys(context).length > 0 ? context : undefined;
   }
 
+  /*
+   * The subtree to inspect.
+   *
+   * `rootMissing` is reported rather than thrown: this function is serialized
+   * into the page, so an exception here surfaces as an opaque evaluate failure
+   * with no selector in it. The adapter turns the flag into ELEMENT_NOT_FOUND
+   * naming what was asked for.
+   *
+   * Note the root is resolved but never itself a candidate — it is the
+   * container, and reporting it would put the panel's own wrapper into every
+   * scoped scan, which is the thing a root is chosen to avoid.
+   */
+  const root =
+    options.rootSelector === undefined || options.rootSelector.length === 0
+      ? document
+      : document.querySelector(options.rootSelector);
+
+  if (root === null) {
+    return {
+      url: window.location.href,
+      title: document.title,
+      elements: [],
+      domFingerprint: '0:rootMissing',
+      totalNodesScanned: 0,
+      rootMissing: true,
+    };
+  }
+
   const elements: RawCandidate[] = [];
-  const all = Array.from(document.querySelectorAll<HTMLElement>('*'));
-  const interactive = new Set<Element>(Array.from(document.querySelectorAll(INTERACTIVE_SELECTOR)));
+  const all = Array.from(root.querySelectorAll<HTMLElement>('*'));
+  const interactive = new Set<Element>(Array.from(root.querySelectorAll(INTERACTIVE_SELECTOR)));
 
   let domIndex = 0;
   for (const element of all) {

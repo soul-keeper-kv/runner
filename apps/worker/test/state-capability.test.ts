@@ -242,3 +242,110 @@ describe('state.inspect', () => {
     expect(result.value.candidateCount).toBe(400);
   });
 });
+
+describe('state.inspect root scoping', () => {
+  /*
+   * The root reaches the browser rather than being applied afterwards, and that
+   * is the whole reason it exists: the candidate cap is then spent inside the
+   * container. A capability that filtered the result instead would still lose a
+   * panel's elements to a cap consumed by the page around it.
+   */
+  it('forwards rootSelector to the inspector', async () => {
+    let received: unknown;
+
+    await new StateCapability().execute(
+      commandOf('state.inspect', { rootSelector: '#panel-1' }),
+      contextWith({
+        inspect: async (options?: unknown) => {
+          received = options;
+          return ok({
+            url: 'https://example.test/login',
+            capturedAt: '2026-01-01T00:00:00.000Z',
+            elements: [candidate()],
+            frames: [],
+            pageMetadata: {},
+          } as PageSnapshot);
+        },
+      }),
+    );
+
+    expect(received).toMatchObject({ rootSelector: '#panel-1', interactableOnly: true });
+  });
+
+  /*
+   * The asymmetry is the point: a transient read failure still answers with a
+   * frame, but a root the caller named and got wrong must not come back as a
+   * successful snapshot holding no candidates — that is indistinguishable from
+   * an empty container, and it is how a scan silently covers the wrong scope.
+   */
+  it('fails instead of degrading when a named root matches nothing', async () => {
+    const result = await new StateCapability().execute(
+      commandOf('state.inspect', { rootSelector: '#nope' }),
+      contextWith({
+        inspect: async () => err(RunnerErrors.elementNotFound('inspection root #nope')),
+      }),
+    );
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.code).toBe('ELEMENT_NOT_FOUND');
+  });
+
+  it('still degrades for a read failure when no root was named', async () => {
+    const result = await new StateCapability().execute(
+      commandOf('state.inspect'),
+      contextWith({ inspect: async () => err(RunnerErrors.internal('Inspect failed.')) }),
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.candidates).toBeUndefined();
+    expect(result.value.url).toBe('https://example.test/login');
+  });
+
+  it('omits rootSelector entirely when none is given', async () => {
+    let received: Record<string, unknown> | undefined;
+
+    await new StateCapability().execute(
+      commandOf('state.inspect'),
+      contextWith({
+        inspect: async (options?: unknown) => {
+          received = options as Record<string, unknown>;
+          return ok({
+            url: 'https://example.test/login',
+            capturedAt: '2026-01-01T00:00:00.000Z',
+            elements: [candidate()],
+            frames: [],
+            pageMetadata: {},
+          } as PageSnapshot);
+        },
+      }),
+    );
+
+    // Absent rather than undefined: the adapter spreads this straight into
+    // page.evaluate, and an explicit undefined would serialize as a key.
+    expect(received !== undefined && 'rootSelector' in received).toBe(false);
+  });
+
+  it('treats an empty rootSelector as no root', async () => {
+    let received: Record<string, unknown> | undefined;
+
+    await new StateCapability().execute(
+      commandOf('state.inspect', { rootSelector: '' }),
+      contextWith({
+        inspect: async (options?: unknown) => {
+          received = options as Record<string, unknown>;
+          return ok({
+            url: 'https://example.test/login',
+            capturedAt: '2026-01-01T00:00:00.000Z',
+            elements: [candidate()],
+            frames: [],
+            pageMetadata: {},
+          } as PageSnapshot);
+        },
+      }),
+    );
+
+    expect(received !== undefined && 'rootSelector' in received).toBe(false);
+  });
+});

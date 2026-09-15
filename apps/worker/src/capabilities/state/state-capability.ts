@@ -5,7 +5,7 @@ import type {
   RawLiveCommand,
   StateSnapshotPayload,
 } from '@runner/live-protocol';
-import { ok, type Result } from '@runner/shared';
+import { err, ok, type Result } from '@runner/shared';
 import {
   payloadOf,
   type LiveCapability,
@@ -115,8 +115,18 @@ export class StateCapability implements LiveCapability<LiveStateSnapshot> {
       if (frame !== undefined) snapshot.frame = frame;
     }
 
+    // Normalized once: an empty string is "no root", not a selector that
+    // matches nothing, and both branches below have to agree on which it is.
+    const rootSelector =
+      options.rootSelector === undefined || options.rootSelector.length === 0
+        ? undefined
+        : options.rootSelector;
+
     if (includeCandidates) {
-      const inspected = await browser.inspect({ interactableOnly: true });
+      const inspected = await browser.inspect({
+        interactableOnly: true,
+        ...(rootSelector === undefined ? {} : { rootSelector }),
+      });
       // A page whose candidates cannot be read still has a URL and a frame
       // worth showing, so this degrades rather than failing the command.
       if (inspected.ok) {
@@ -124,6 +134,22 @@ export class StateCapability implements LiveCapability<LiveStateSnapshot> {
         snapshot.candidates = inspected.value.elements
           .slice(0, MAX_CANDIDATES)
           .map(toSummary);
+      } else if (rootSelector !== undefined) {
+        /*
+         * Except when the caller named a root.
+         *
+         * Degrading is right for a transient read failure — the frame is still
+         * worth seeing. It is wrong for a root that does not match: that is the
+         * caller's own selector being incorrect, and a successful snapshot with
+         * no candidates is indistinguishable from "this container is empty".
+         * The workspace showed neither a count nor a reason, which is exactly
+         * the silent mis-scoping a root is supposed to make impossible.
+         */
+        context.logger.warn('Snapshot root selector matched nothing', {
+          rootSelector,
+          errorCode: inspected.error.code,
+        });
+        return err(inspected.error);
       } else {
         context.logger.debug('Snapshot could not read page candidates', {
           errorCode: inspected.error.code,
