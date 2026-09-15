@@ -7,7 +7,7 @@
  * then drives the Runner through its public API and live command protocol to
  * reach that page.
  *
- * Four acts, in this order on purpose:
+ * Five acts, in this order on purpose:
  *
  *   1. No profile          -> /orders shows the login wall. The failure first,
  *                             so the success afterwards is not a coincidence.
@@ -18,10 +18,18 @@
  *   4. A brand-new session -> opens already authenticated from the stored
  *                             session. No second login, which is the whole
  *                             point of storing it.
+ *   5. A token profile     -> no form is driven at all: the Runner exchanges
+ *                             credentials at /api/auth/login and sends the
+ *                             token it gets back as a bearer header. This is
+ *                             the path an API-first application needs, where
+ *                             replaying a UI login means automating a screen
+ *                             nobody uses.
  *
  * The gate is checked on the server, not in the markup: a page that decided by
  * reading a query parameter would let the Runner "reach" it without ever
- * authenticating, which would make this demo prove nothing.
+ * authenticating, which would make this demo prove nothing. /orders accepts
+ * either mechanism — the cookie a form login produced, or a bearer token the
+ * API login issued — so one fixture exercises both.
  *
  * Running it against the apps from source:
  *
@@ -77,6 +85,13 @@ const FIXTURE_PORT = Number.parseInt(process.env.FIXTURE_PORT ?? '8899', 10);
 const FIXTURE_HOST = process.env.FIXTURE_HOST ?? 'localhost';
 const WORKSPACE_REF = process.env.WORKSPACE_REF ?? 'workspace_demo';
 const PROFILE_REF = process.env.AUTH_PROFILE_REF ?? 'MANAGER';
+/**
+ * The profile act 5 stores through the API.
+ *
+ * Separate from the form-login profile so the two acts cannot interfere: a
+ * shared ref would mean one act's stored session satisfying the other's login.
+ */
+const TOKEN_PROFILE_REF = process.env.TOKEN_PROFILE_REF ?? 'DEMO_TOKEN';
 const DEMO_USER = process.env.DEMO_USER ?? 'manager@example.com';
 const DEMO_PASS = process.env.DEMO_PASS ?? 'demo-password';
 
@@ -93,6 +108,9 @@ const pages = {
 /** Sessions this demo app considers signed in. Server-side, like a real one. */
 const validSessions = new Set();
 
+/** Tokens the API login handed out. A bearer header carrying one is signed in. */
+const issuedTokens = new Set();
+
 // ---------------------------------------------------------------------------
 // The application under test
 // ---------------------------------------------------------------------------
@@ -105,6 +123,30 @@ function startFixture() {
       res.writeHead(status, { 'content-type': 'text/html; charset=utf-8', ...headers });
       res.end(body);
     };
+
+    // A token endpoint, so an API_TOKEN profile has something real to call.
+    // It answers the shape an application usually does — the token nested
+    // under a key — which is why a profile has to name a path to it.
+    if (url.pathname === '/api/auth/login' && req.method === 'POST') {
+      let body = '';
+      req.on('data', (chunk) => { body += chunk; });
+      req.on('end', () => {
+        let parsed;
+        try { parsed = JSON.parse(body); } catch { parsed = {}; }
+
+        if (parsed.username !== DEMO_USER || parsed.password !== DEMO_PASS) {
+          res.writeHead(401, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ message: 'bad credentials' }));
+          return;
+        }
+
+        const token = randomUUID();
+        issuedTokens.add(token);
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ data: { access_token: token, expires_in: 3600 } }));
+      });
+      return;
+    }
 
     if (url.pathname === '/login' && req.method === 'POST') {
       let body = '';
@@ -160,6 +202,13 @@ function startFixture() {
 }
 
 function signedIn(req) {
+  // Either mechanism proves a session: the cookie a form login produced, or
+  // a bearer token the API login issued. An app that accepts both is the
+  // common case, and it lets one demo exercise both paths.
+  const auth = req.headers.authorization ?? '';
+  const bearer = auth.startsWith('Bearer ') ? auth.slice(7) : undefined;
+  if (bearer !== undefined && issuedTokens.has(bearer)) return true;
+
   const cookie = req.headers.cookie ?? '';
   const match = /(?:^|;\s*)demo_session=([^;]+)/.exec(cookie);
   return match !== null && validSessions.has(match[1]);
@@ -377,8 +426,14 @@ async function main() {
 
     const reusedWithoutLoggingIn = reused.page.title === 'Orders';
 
-    if (gated && reachedTheApp && reusedWithoutLoggingIn) {
-      console.log('Demo passed: a gated page was reached, and the login happened once.');
+    // --- 5. A token profile, driving no form at all ---------------------------
+    console.log(`5. a token profile (${TOKEN_PROFILE_REF}), no form driven`);
+    const tokenReached = await runTokenAct(base);
+
+    if (gated && reachedTheApp && reusedWithoutLoggingIn && tokenReached) {
+      console.log(
+        'Demo passed: a gated page was reached by a form login and by a bearer token, and each login happened once.',
+      );
     } else {
       console.error('Demo did not reach the authenticated page as expected.');
       process.exitCode = 1;
@@ -386,6 +441,84 @@ async function main() {
   } finally {
     fixture.close();
   }
+}
+
+/**
+ * The token path, end to end.
+ *
+ * Stores a profile through the public API — which is what a user does in the
+ * workspace — then opens a live session with it and logs in. Nothing drives a
+ * form: the Runner posts to the application's token endpoint and puts what comes
+ * back into an `Authorization` header.
+ *
+ * The profile is written here rather than declared in the environment because
+ * that is the point of managed profiles: reaching a new application should not
+ * need a redeploy.
+ */
+async function runTokenAct(base) {
+  const saved = await fetch(
+    `${API}/api/v1/auth/profiles/${TOKEN_PROFILE_REF}?workspaceRef=${encodeURIComponent(WORKSPACE_REF)}`,
+    {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        displayName: 'Demo API token',
+        strategy: 'API_TOKEN',
+        // Used only as the origin for placements; no form is ever driven.
+        loginUrl: `${base}/login`,
+        tokenSource: {
+          kind: 'apiLogin',
+          url: `${base}/api/auth/login`,
+          bodyTemplate: '{"username":"{{username}}","password":"{{password}}"}',
+          // Named, never guessed: the endpoint nests it, as most do.
+          tokenPath: 'data.access_token',
+        },
+        tokenPlacements: [{ kind: 'header' }],
+        secrets: { username: DEMO_USER, password: DEMO_PASS },
+      }),
+    },
+  );
+
+  if (!saved.ok) {
+    const body = await saved.json().catch(() => undefined);
+    const error = body?.error;
+
+    if (error?.code === 'CAPABILITY_NOT_IMPLEMENTED') {
+      // A deployment with no encryption key cannot store credentials, which is
+      // a deliberate refusal rather than a failure. Say so and skip the act.
+      console.log(`   skipped: ${error.message}`);
+      return true;
+    }
+
+    console.log(`   could not store the profile: ${error?.code ?? saved.status}`);
+    return false;
+  }
+
+  const profile = await saved.json();
+  console.log(
+    `   profile stored: source=${profile.tokenSource?.kind}, placement=${profile.tokenPlacements?.map((p) => p.kind).join('+')}, secrets set: ${profile.secretsPresent.join(', ')}`,
+  );
+
+  return withSession({ authProfileRef: TOKEN_PROFILE_REF }, async (client) => {
+    const login = await client.send('auth.login', { profileRef: TOKEN_PROFILE_REF });
+    if (!login.ok) {
+      console.log(`   auth.login -> ${describeError(login)}`);
+      return false;
+    }
+    console.log('   auth.login -> token fetched and placed as a bearer header');
+
+    const page = await client.look(`${base}/orders`);
+    console.log(`   /orders -> "${page.title}"`);
+    console.log(`   sees: ${page.names.slice(0, 8).join(', ')}`);
+
+    const reached = page.title === 'Orders';
+    console.log(
+      reached
+        ? '   reached the gated page with a token, having driven no form\n'
+        : '   UNEXPECTED: the token did not authenticate the browser\n',
+    );
+    return reached;
+  });
 }
 
 /** Opens a live session, runs one act against it, and always closes it. */
