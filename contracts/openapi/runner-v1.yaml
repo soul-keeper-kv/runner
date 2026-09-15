@@ -782,6 +782,12 @@ paths:
                   description: |
                     Credential values to seal, by field name. Write-only: no
                     response ever contains one.
+                tokenPlacements:
+                  $ref: '#/components/schemas/TokenPlacements'
+                tokenSource:
+                  $ref: '#/components/schemas/TokenSource'
+                extraHeaders:
+                  $ref: '#/components/schemas/ProfileHeaders'
       responses:
         '200':
           description: The saved profile.
@@ -1435,6 +1441,122 @@ components:
         startedAt: { type: string, format: date-time }
         completedAt: { type: string, format: date-time }
 
+    TokenPlacements:
+      type: array
+      description: |
+        Where a token must end up for the application to consider the browser
+        signed in. Required for `API_TOKEN`, and a list rather than a single
+        mode because there is no portable answer: an SPA reads storage during
+        bootstrap, a server-rendered app reads a cookie, an API-first one wants
+        the header, and an application mid-migration needs two at once.
+
+        Guessing wrong produces the worst failure in this area — a login that
+        reports success while every page still shows the sign-in screen — so the
+        Runner refuses a profile that names none rather than defaulting.
+      items:
+        type: object
+        required: [kind]
+        properties:
+          kind:
+            type: string
+            enum: [header, localStorage, sessionStorage, cookie]
+          name:
+            type: string
+            description: Header or cookie name. Defaults to `Authorization` for a header.
+          prefix:
+            type: string
+            description: Header value prefix. Defaults to `Bearer ` (with the trailing space).
+          key:
+            type: string
+            description: Storage key the application reads, e.g. `access_token`.
+          jsonTemplate:
+            type: string
+            description: |
+              Wraps the token before writing it to storage, with `{{token}}`
+              substituted. Many applications keep an envelope such as
+              `{"state":{"token":"{{token}}"},"version":0}`, and a bare string
+              in that slot reads as a corrupt session rather than a login.
+          origin:
+            type: string
+            description: |
+              Origin the storage belongs to. Defaults to the profile's own
+              login URL. Storage is origin-scoped, so a token written without
+              one is written nowhere the application will look.
+          domain: { type: string }
+          path: { type: string }
+          httpOnly: { type: boolean }
+          secure: { type: boolean }
+          sameSite:
+            type: string
+            enum: [Strict, Lax, None]
+
+    TokenSource:
+      type: object
+      description: |
+        How the Runner obtains a token. `static` names the secret holding one a
+        user pasted in; `apiLogin` exchanges credentials at the application's
+        own login endpoint, which is the only form that can refresh itself
+        without a human.
+      required: [kind]
+      properties:
+        kind:
+          type: string
+          enum: [static, apiLogin]
+        secretRef:
+          type: string
+          description: |
+            For a `static` source: names the entry in `secrets` or `secretRefs`
+            that holds the token.
+        url: { type: string }
+        method:
+          type: string
+          enum: [POST, PUT, GET]
+        bodyTemplate:
+          type: string
+          description: |
+            Request body with `{{secretRef}}` placeholders, substituted from the
+            resolved secrets and JSON-escaped. A template rather than named
+            fields because login payloads differ wildly, and a fixed shape would
+            fit almost none of them.
+        contentType: { type: string }
+        headers:
+          $ref: '#/components/schemas/ProfileHeaders'
+        tokenPath:
+          type: string
+          description: |
+            Dotted path to the token in the response, e.g. `data.access_token`.
+            Required for `apiLogin`: picking whichever string looks like a JWT
+            would choose a refresh token about as often as an access token, and
+            the resulting failure — authenticated briefly, then not — is hard to
+            attribute.
+        expiresInPath: { type: string }
+
+    ProfileHeaders:
+      type: array
+      description: |
+        Headers added to every request the profile's browser makes. Free-form
+        because an internal application usually wants a tenant id, an API
+        version or a feature flag alongside authentication, and enumerating
+        those in the Runner would mean a redeploy per application.
+
+        A browser sends context headers to *every* origin the page reaches,
+        including third parties. A header carrying a credential is therefore
+        trusted to every host the application talks to; the Runner logs a
+        warning when a profile does that rather than leaving it to be found out.
+      items:
+        type: object
+        required: [name]
+        properties:
+          name: { type: string }
+          value:
+            type: string
+            description: A literal value. Omit when `secretRef` supplies it.
+          secretRef:
+            type: string
+            description: |
+              Names an entry in `secrets`/`secretRefs`, so a header value that
+              is a credential is stored sealed like a password.
+
     AuthProfile:
       type: object
       description: |
@@ -1464,6 +1586,12 @@ components:
           type: object
           additionalProperties: { type: string }
           description: Field names resolved from an environment variable instead.
+        tokenPlacements:
+          $ref: '#/components/schemas/TokenPlacements'
+        tokenSource:
+          $ref: '#/components/schemas/TokenSource'
+        extraHeaders:
+          $ref: '#/components/schemas/ProfileHeaders'
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
 
