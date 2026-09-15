@@ -15,7 +15,7 @@ so there is something to compare a model's answer against.
 | 3 | Locator engine: generate, score, validate, resolve | **Done** |
 | 3.5 | Page inspection API: URL in, draft registry entries out | **Done** |
 | 4 | Registry: stable ids, names, aliases, fallbacks, history | **Done** |
-| 5 | Authentication: `storageState`, form login, profiles | **Done** (FORM_LOGIN + STORAGE_STATE; executions, inspections and live sessions; profiles managed over the API or declared in the environment) |
+| 5 | Authentication: `storageState`, form login, tokens, profiles | **Done** (FORM_LOGIN + API_TOKEN + STORAGE_STATE, arbitrary request headers; executions, inspections and live sessions; profiles managed over the API or declared in the environment) |
 | 6 | Preconditions: handlers, explicit pre-steps | **Done** (entityState needs a seeding port) |
 | 7 | LiveSession: capability dispatch wired end to end | **Done** (browser, selector, state, element, registry, recording, auth) |
 | 8 | Live preview: screenshot view, bbox highlight, confirm/reject | **Done** (view + highlight) |
@@ -56,7 +56,13 @@ running that execution resolves it.
 The same rule binds the live `auth.login` command, and more tightly: it arrives
 over a WebSocket from a browser tab, so its payload names a profile and
 `additionalProperties` is `false` — a client cannot even send a field called
-`password`. A live session must also never conclude it is authenticated by
+`password`. A token is the same kind of secret as a password — holding one *is* being
+authenticated — so it never reaches a log, a result or an error payload, and a
+stored token is sealed like any other credential. What a profile may state
+freely is *where* a token goes and which headers accompany it: those name a
+storage key, a cookie or a header, never a value.
+
+A live session must also never conclude it is authenticated by
 reading the page; `authenticatedAs` is set from a restored session or a
 completed login, nothing else.
 

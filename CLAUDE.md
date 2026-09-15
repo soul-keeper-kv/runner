@@ -140,6 +140,21 @@ the environment and never stored beside the data. What did not move:
 - **Form fields are named, never selected.** A profile says
   `{"username":"USERNAME *"}` — an accessible name the locator engine resolves
   like any other target.
+
+`FORM_LOGIN` drives the real UI and is the right default. `API_TOKEN` exists for
+an application where no form is worth driving: the token comes from a stored
+value or from an exchange at the application's own login endpoint, and the
+profile says **where it goes** — a storage key, a cookie, a request header, or
+several at once. That is configuration rather than a guess because there is no
+portable answer, and guessing wrong produces the worst failure in this area: a
+login that reports success while every page still shows the sign-in screen.
+
+A profile may also carry arbitrary `extraHeaders`, which apply to every strategy
+— an internal app often needs a tenant id before it will answer the login
+request at all. A header value may name a secret instead of holding one. Note
+what a browser does with context headers: it sends them to *every* origin the
+page reaches, third parties included, so the Runner warns when a profile puts a
+credential there.
 Leave a namespace unregistered until it works: an unregistered command returns
 `LIVE_COMMAND_UNSUPPORTED` naming it, which tells a client developer more than a
 silent no-op.
