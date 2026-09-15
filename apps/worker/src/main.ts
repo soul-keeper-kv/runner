@@ -16,6 +16,7 @@ import { AuthenticatedStateHandler } from './modules/auth/authenticated-state-ha
 import { AuthCapability } from './capabilities/auth/auth-capability.js';
 import { EnvSecretProvider } from './infrastructure/secrets/env-secret-provider.js';
 import { CompositeSecretProvider } from './infrastructure/secrets/composite-secret-provider.js';
+import { FetchHttpClient } from './infrastructure/http/fetch-http-client.js';
 import { SessionManager } from './modules/session/session-manager.js';
 import { DomInspector } from './modules/inspector/dom-inspector.js';
 import { DeterministicElementResolver } from './modules/resolver/element-resolver.js';
@@ -174,6 +175,9 @@ async function bootstrap(): Promise<void> {
     resolver,
     clock: systemClock,
     logger,
+    // The only outbound HTTP the Runner makes on its own behalf: exchanging
+    // credentials for a token at an application's login endpoint.
+    http: new FetchHttpClient(logger),
   });
 
   const sessions = new SessionManager(browsers, logger, auth);

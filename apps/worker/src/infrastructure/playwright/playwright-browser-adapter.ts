@@ -1,9 +1,11 @@
 import type { BrowserContext, Page } from 'playwright';
 import type {
+  BrowserCookie,
   BrowserPort,
   InspectOptions,
   LocatorMatchInfo,
   NavigateOptions,
+  OriginStorageSeed,
   ScreenshotOptions,
 } from '@runner/application';
 import type {
@@ -33,6 +35,16 @@ import { describeAtPointScript, describeElementScript } from './point-pick-scrip
 export class PlaywrightBrowserAdapter implements BrowserPort {
   /** Set once the page has the transpiler helper shims; see ensureTranspilerHelpers. */
   private helpersInstalled = false;
+
+  /**
+   * Every header applied so far.
+   *
+   * Playwright's `setExtraHTTPHeaders` replaces the whole set, so the adapter
+   * accumulates: a profile that sets `Authorization` and then a tenant header
+   * must end up with both, and silently losing the first would read as an
+   * expired token.
+   */
+  private readonly extraHeaders: Record<string, string> = {};
 
   constructor(
     readonly sessionId: string,
@@ -390,6 +402,129 @@ export class PlaywrightBrowserAdapter implements BrowserPort {
       return ok(await this.context.storageState());
     } catch (cause) {
       return err(RunnerErrors.internal('Could not capture the browser storage state.', cause));
+    }
+  }
+
+  /**
+   * Adds headers to every subsequent request from this context.
+   *
+   * Playwright replaces the whole set on each call, so the adapter accumulates
+   * them: a profile that sets `Authorization` and then a tenant header must end
+   * up with both, and losing the first would look like an expired token.
+   */
+  async setExtraHeaders(headers: Readonly<Record<string, string>>): Promise<Result<void>> {
+    try {
+      Object.assign(this.extraHeaders, headers);
+      await this.context.setExtraHTTPHeaders({ ...this.extraHeaders });
+
+      // Names only. A header value is frequently the credential itself.
+      this.logger.debug('Extra request headers applied', {
+        headers: Object.keys(this.extraHeaders),
+      });
+      return ok(undefined);
+    } catch (cause) {
+      return err(RunnerErrors.internal('Could not apply request headers.', cause));
+    }
+  }
+
+  async addCookies(cookies: readonly BrowserCookie[]): Promise<Result<void>> {
+    if (cookies.length === 0) return ok(undefined);
+
+    try {
+      await this.context.addCookies(
+        cookies.map((cookie) => ({
+          name: cookie.name,
+          value: cookie.value,
+          ...(cookie.url === undefined ? {} : { url: cookie.url }),
+          ...(cookie.domain === undefined ? {} : { domain: cookie.domain }),
+          ...(cookie.path === undefined ? { path: '/' } : { path: cookie.path }),
+          ...(cookie.httpOnly === undefined ? {} : { httpOnly: cookie.httpOnly }),
+          ...(cookie.secure === undefined ? {} : { secure: cookie.secure }),
+          ...(cookie.sameSite === undefined ? {} : { sameSite: cookie.sameSite }),
+          ...(cookie.expires === undefined ? {} : { expires: cookie.expires }),
+        })),
+      );
+
+      this.logger.debug('Cookies seeded', { cookies: cookies.map((cookie) => cookie.name) });
+      return ok(undefined);
+    } catch (cause) {
+      return err(
+        RunnerErrors.internal(
+          // Playwright rejects a cookie with neither url nor domain, and the
+          // message is otherwise cryptic.
+          'Could not seed cookies. Each one needs a url or a domain.',
+          cause,
+        ),
+      );
+    }
+  }
+
+  /**
+   * Writes storage for an origin.
+   *
+   * Storage only exists once a document from that origin has loaded, so this
+   * navigates there first. `addInitScript` then writes the entries *before* any
+   * application script runs on the next load — which is the whole point: an app
+   * reads its token during bootstrap, so writing afterwards is too late and
+   * looks exactly like a token that does not work.
+   */
+  async seedOriginStorage(input: OriginStorageSeed): Promise<Result<void>> {
+    try {
+      await this.page.goto(input.origin, {
+        waitUntil: 'domcontentloaded',
+        timeout: this.defaultTimeoutMs,
+      });
+
+      // Both calls below send a function into the page, so the esbuild `__name`
+      // shim has to exist there first. Without this the whole thing works from
+      // dist/ and dies from source with `__name is not defined`.
+      await this.ensureTranspilerHelpers();
+
+      const payload = { storage: input.storage, entries: input.entries };
+
+      // Applied to every later navigation in this context, so a page reload —
+      // or the app redirecting to /login and back — keeps the token.
+      await this.context.addInitScript(
+        ({ storage, entries }: { storage: string; entries: Record<string, string> }) => {
+          const target = storage === 'sessionStorage' ? window.sessionStorage : window.localStorage;
+          for (const [key, value] of Object.entries(entries)) {
+            try {
+              target.setItem(key, value);
+            } catch {
+              // A blocked or full storage must not abort the run; the login
+              // will fail visibly on the next assertion instead.
+            }
+          }
+        },
+        payload,
+      );
+
+      // And once now, for the document already open.
+      await this.page.evaluate(
+        ({ storage, entries }: { storage: string; entries: Record<string, string> }) => {
+          const target = storage === 'sessionStorage' ? window.sessionStorage : window.localStorage;
+          for (const [key, value] of Object.entries(entries)) {
+            try {
+              target.setItem(key, value);
+            } catch {
+              /* as above */
+            }
+          }
+        },
+        payload,
+      );
+
+      this.logger.debug('Origin storage seeded', {
+        origin: input.origin,
+        storage: input.storage,
+        // Keys only: the value is the token.
+        keys: Object.keys(input.entries),
+      });
+      return ok(undefined);
+    } catch (cause) {
+      return err(
+        RunnerErrors.internal(`Could not seed ${input.storage} for ${input.origin}.`, cause),
+      );
     }
   }
 

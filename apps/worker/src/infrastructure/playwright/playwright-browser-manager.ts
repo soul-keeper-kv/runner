@@ -35,7 +35,30 @@ export class PlaywrightBrowserManager implements BrowserManagerPort {
         ...(options.storageState === undefined
           ? {}
           : { storageState: options.storageState as BrowserContextStorageState }),
+        // Set at launch when the profile is known up front, which is the common
+        // case for an execution. A live session authenticating later goes
+        // through BrowserPort.setExtraHeaders instead, because it must not
+        // restart the context it is investigating.
+        ...(options.extraHeaders === undefined
+          ? {}
+          : { extraHTTPHeaders: { ...options.extraHeaders } }),
       });
+
+      if (options.cookies !== undefined && options.cookies.length > 0) {
+        await context.addCookies(
+          options.cookies.map((cookie) => ({
+            name: cookie.name,
+            value: cookie.value,
+            ...(cookie.url === undefined ? {} : { url: cookie.url }),
+            ...(cookie.domain === undefined ? {} : { domain: cookie.domain }),
+            path: cookie.path ?? '/',
+            ...(cookie.httpOnly === undefined ? {} : { httpOnly: cookie.httpOnly }),
+            ...(cookie.secure === undefined ? {} : { secure: cookie.secure }),
+            ...(cookie.sameSite === undefined ? {} : { sameSite: cookie.sameSite }),
+            ...(cookie.expires === undefined ? {} : { expires: cookie.expires }),
+          })),
+        );
+      }
 
       const defaultTimeout = options.defaultTimeoutMs ?? 15_000;
       context.setDefaultTimeout(defaultTimeout);
