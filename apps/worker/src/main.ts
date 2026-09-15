@@ -1,7 +1,7 @@
 import { Redis } from 'ioredis';
 import { Worker, type Job } from 'bullmq';
 import type { ExecutionJob, InspectionJob } from '@runner/application';
-import { createConsoleLogger, systemClock, type LogLevel } from '@runner/shared';
+import { createConsoleLogger, createSecretBox, systemClock, type LogLevel } from '@runner/shared';
 import { PlaywrightBrowserManager } from './infrastructure/playwright/playwright-browser-manager.js';
 import {
   RedisExecutionStore,
@@ -15,6 +15,7 @@ import { AuthService } from './modules/auth/auth-service.js';
 import { AuthenticatedStateHandler } from './modules/auth/authenticated-state-handler.js';
 import { AuthCapability } from './capabilities/auth/auth-capability.js';
 import { EnvSecretProvider } from './infrastructure/secrets/env-secret-provider.js';
+import { CompositeSecretProvider } from './infrastructure/secrets/composite-secret-provider.js';
 import { SessionManager } from './modules/session/session-manager.js';
 import { DomInspector } from './modules/inspector/dom-inspector.js';
 import { DeterministicElementResolver } from './modules/resolver/element-resolver.js';
@@ -39,7 +40,11 @@ import { RecordingCapability } from './capabilities/recording/recording-capabili
 import { InteractionRecorder } from './modules/recorder/interaction-recorder.js';
 import { HealingEngine } from './modules/healing/healing-engine.js';
 import { HeuristicSemanticResolver } from './infrastructure/semantic/heuristic-semantic-resolver.js';
-import { PostgresRegistryStore, createPostgresClient } from '@runner/infrastructure-postgres';
+import {
+  PostgresAuthProfileStore,
+  PostgresRegistryStore,
+  createPostgresClient,
+} from '@runner/infrastructure-postgres';
 import { SelectorCapability } from './capabilities/selector/selector-capability.js';
 import { StateCapability } from './capabilities/state/state-capability.js';
 import { DefaultLocatorGenerator } from './modules/locator/locator-generator.js';
@@ -128,8 +133,43 @@ async function bootstrap(): Promise<void> {
    * rather than at the start of every run.
    */
   const storageStates = new RedisStorageStateStore(redis, systemClock);
+
+  /*
+   * Profiles come from managed storage first, then from the environment.
+   *
+   * Both are legitimate: a profile stored through the API lets a team point the
+   * Runner at a new application without a redeploy, while
+   * `RUNNER_AUTH_PROFILES` remains the answer for a deployment that will not
+   * put a credential in its database, and for local work with no Postgres.
+   *
+   * The key is required for the managed half and never stored with the data, so
+   * a worker without it simply falls back — it does not read credentials it
+   * cannot decrypt.
+   */
+  const envSecrets = new EnvSecretProvider(logger);
+  const secretKey = process.env.RUNNER_SECRET_KEY ?? '';
+  const secretBox = secretKey === '' ? undefined : createSecretBox(secretKey);
+
+  if (secretBox !== undefined && !secretBox.ok) {
+    logger.error(secretBox.error.message);
+  }
+
+  const authProfiles =
+    postgres !== undefined && secretBox?.ok === true
+      ? new PostgresAuthProfileStore(postgres, secretBox.value, systemClock, logger)
+      : undefined;
+
+  if (authProfiles === undefined) {
+    logger.warn(
+      'Managed auth profiles are unavailable in this worker (needs DATABASE_URL and RUNNER_SECRET_KEY); using RUNNER_AUTH_PROFILES only.',
+    );
+  }
+
   const auth = new AuthService({
-    secrets: new EnvSecretProvider(logger),
+    secrets:
+      authProfiles === undefined
+        ? envSecrets
+        : new CompositeSecretProvider(authProfiles, envSecrets, logger),
     storageStates,
     resolver,
     clock: systemClock,
