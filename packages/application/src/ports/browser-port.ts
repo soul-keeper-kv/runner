@@ -102,12 +102,61 @@ export interface BrowserPort {
    */
   captureStorageState(): Promise<Result<unknown>>;
 
+  /**
+   * Adds headers to every subsequent request this context makes.
+   *
+   * Applied to a context that is *already open*, which is what lets a live
+   * session authenticate without restarting — the page keeps the state that
+   * made it worth investigating.
+   *
+   * Note what this cannot do: browsers send context headers to every origin the
+   * page reaches, including third parties. A caller putting a credential here
+   * is trusting every host the application talks to, so `AuthService` warns
+   * when a profile does it.
+   */
+  setExtraHeaders(headers: Readonly<Record<string, string>>): Promise<Result<void>>;
+
+  /** Seeds cookies, e.g. a session token an API login returned. */
+  addCookies(cookies: readonly BrowserCookie[]): Promise<Result<void>>;
+
+  /**
+   * Writes `localStorage` or `sessionStorage` for an origin.
+   *
+   * Storage is origin-scoped and only exists once a document from that origin
+   * has loaded, so an implementation has to visit the origin first. That makes
+   * this a navigation — the caller gets the page it asked for afterwards, not
+   * whatever was open before.
+   */
+  seedOriginStorage(input: OriginStorageSeed): Promise<Result<void>>;
+
   screenshot(options?: ScreenshotOptions): Promise<Result<Buffer>>;
 
   /** Draws a transient overlay for the live workspace. */
   highlight(selector: ScopedSelector, durationMs?: number): Promise<Result<void>>;
 
   close(): Promise<void>;
+}
+
+/** A cookie as the Runner describes one, independent of any engine. */
+export interface BrowserCookie {
+  readonly name: string;
+  readonly value: string;
+  /** One of these is required; a cookie with neither belongs nowhere. */
+  readonly domain?: string;
+  readonly url?: string;
+  readonly path?: string;
+  readonly httpOnly?: boolean;
+  readonly secure?: boolean;
+  readonly sameSite?: 'Strict' | 'Lax' | 'None';
+  /** Unix seconds. Absent means a session cookie. */
+  readonly expires?: number;
+}
+
+export interface OriginStorageSeed {
+  /** Scheme and host, e.g. `https://app.example.com`. */
+  readonly origin: string;
+  readonly storage: 'localStorage' | 'sessionStorage';
+  readonly entries: Readonly<Record<string, string>>;
 }
 
 export interface BrowserLaunchOptions {
@@ -117,6 +166,15 @@ export interface BrowserLaunchOptions {
   /** Serialized cookies/localStorage restoring an authenticated session. */
   readonly storageState?: unknown;
   readonly defaultTimeoutMs?: number;
+  /**
+   * Headers sent with every request from this context.
+   *
+   * Set at launch when the profile is known up front, which is the common case
+   * for an execution. A live session that authenticates later uses
+   * `BrowserPort.setExtraHeaders` instead, because it must not restart.
+   */
+  readonly extraHeaders?: Readonly<Record<string, string>>;
+  readonly cookies?: readonly BrowserCookie[];
 }
 
 export interface BrowserManagerPort {
