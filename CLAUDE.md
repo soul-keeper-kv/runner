@@ -14,6 +14,7 @@ That belongs to a separate service which integrates over HTTP only.
 | Registry, aliases, revisions, confidence, self-healing | `runner-registry` |
 | Live commands, WebSocket, capabilities, `apps/live-web` | `runner-live-protocol` |
 | Writing or debugging tests | `runner-testing` |
+| Wording a commit message, splitting a working tree into commits | `git-commit` |
 
 They are in `.claude/skills/`. Load the relevant one before writing code — the
 layering here is enforced by lint, and the contract rules protect an external
