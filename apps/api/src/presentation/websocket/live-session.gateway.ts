@@ -29,6 +29,32 @@ export function registerLiveSessionGateway(app: FastifyInstance, container: ApiC
       const { sessionId } = request.params;
       const logger = container.logger.child({ sessionId });
 
+      /*
+       * The message listener is attached synchronously, before the session
+       * lookup below, and frames that arrive during it are queued.
+       *
+       * Attaching it after the `await` loses whatever was sent in the meantime:
+       * `ws` discards a message with no listener, so the command vanished with
+       * no error, no log and no reply, and the client waited out its timeout.
+       * A client that sends as soon as the socket opens wins that race almost
+       * every time against a warm server — which made the first command of
+       * every session after the first one disappear.
+       */
+      let ready = false;
+      const queued: Buffer[] = [];
+
+      socket.on('message', (raw: Buffer) => {
+        if (!ready) {
+          queued.push(raw);
+          return;
+        }
+        void handleMessage(socket, container, sessionId, raw);
+      });
+
+      socket.on('close', () => {
+        logger.info('Live session socket disconnected');
+      });
+
       void (async () => {
         const session = await getLiveSession(
           { sessions: container.sessionStore, clock: container.clock, logger: container.logger },
@@ -59,13 +85,14 @@ export function registerLiveSessionGateway(app: FastifyInstance, container: ApiC
           },
         });
 
-        socket.on('message', (raw: Buffer) => {
-          void handleMessage(socket, container, sessionId, raw);
-        });
-
-        socket.on('close', () => {
-          logger.info('Live session socket disconnected');
-        });
+        // Drained in arrival order, and only now that the session is known to
+        // exist: a command for a session that was never found must be refused
+        // rather than dispatched.
+        ready = true;
+        for (const raw of queued) {
+          await handleMessage(socket, container, sessionId, raw);
+        }
+        queued.length = 0;
       })();
     },
   );
