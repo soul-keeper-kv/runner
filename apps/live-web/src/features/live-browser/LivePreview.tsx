@@ -168,14 +168,21 @@ export function LivePreview(): JSX.Element {
         <input
           id="scan-root"
           value={scanRoot}
-          placeholder="#caris-tab-panel-tab-1789465464622"
+          placeholder='[id^="caris-tab-panel-tab-"]'
           onChange={(event) => setScanRoot(event.target.value)}
         />
         <span className="muted">
           A CSS selector for the container that holds everything worth
-          inspecting. Remembered for {hostLabel(snapshot?.url) ?? 'this site'}, so it
-          applies to every later scan. Empty scans the whole page; a selector
-          matching nothing fails and says so.
+          inspecting, remembered for {hostLabel(snapshot?.url) ?? 'this site'}.
+          {/*
+            The placeholder is a prefix match, not a literal id, because a
+            generated id is the case that breaks: #caris-tab-panel-tab-1789…
+            carries a timestamp, so a root saved today matches nothing
+            tomorrow. `^=` prefix, `$=` suffix, `*=` contains.
+          */}{' '}
+          For a generated id, match the part that does not change:{' '}
+          <code>[id^=&quot;prefix-&quot;]</code>. Empty scans the whole page;
+          matching nothing or several elements fails and says how many.
         </span>
       </div>
 

@@ -43,6 +43,14 @@ export interface RawSnapshot {
   totalNodesScanned: number;
   /** Set when `rootSelector` matched nothing, so the caller can say which. */
   rootMissing?: boolean;
+  /**
+   * How many elements `rootSelector` matched.
+   *
+   * Reported even when it matched exactly one: the adapter decides what is
+   * acceptable, and a count is the only thing that lets it say "matched 3"
+   * instead of "something was wrong with your selector".
+   */
+  rootMatchCount?: number;
 }
 
 export interface InspectScriptOptions {
@@ -295,22 +303,31 @@ export function inspectPageScript(options: InspectScriptOptions): RawSnapshot {
    * Note the root is resolved but never itself a candidate — it is the
    * container, and reporting it would put the panel's own wrapper into every
    * scoped scan, which is the thing a root is chosen to avoid.
+   *
+   * `querySelectorAll`, not `querySelector`, because a generated id forces a
+   * wildcard: `[id^="caris-tab-panel-tab-"]` is how you name a panel whose id
+   * ends in a timestamp, and a pattern like that can match siblings. Taking the
+   * first silently would scan *a* panel without saying which — so the count
+   * goes back and the adapter refuses anything but one.
    */
-  const root =
-    options.rootSelector === undefined || options.rootSelector.length === 0
-      ? document
-      : document.querySelector(options.rootSelector);
+  const scoped = options.rootSelector !== undefined && options.rootSelector.length > 0;
+  const matches = scoped
+    ? Array.from(document.querySelectorAll<HTMLElement>(options.rootSelector as string))
+    : [];
 
-  if (root === null) {
+  if (scoped && matches.length !== 1) {
     return {
       url: window.location.href,
       title: document.title,
       elements: [],
-      domFingerprint: '0:rootMissing',
+      domFingerprint: `0:root${matches.length === 0 ? 'Missing' : 'Ambiguous'}`,
       totalNodesScanned: 0,
-      rootMissing: true,
+      rootMatchCount: matches.length,
+      ...(matches.length === 0 ? { rootMissing: true } : {}),
     };
   }
+
+  const root: Document | HTMLElement = scoped ? (matches[0] as HTMLElement) : document;
 
   const elements: RawCandidate[] = [];
   const all = Array.from(root.querySelectorAll<HTMLElement>('*'));

@@ -291,6 +291,26 @@ describe('state.inspect root scoping', () => {
     expect(result.error.code).toBe('ELEMENT_NOT_FOUND');
   });
 
+  /*
+   * A wildcard root is the normal way to name a panel whose id is generated,
+   * and a slightly-too-broad one matches its siblings. Scanning the first would
+   * yield a draft for *a* panel with nothing saying which.
+   */
+  it('fails when a named root matches several elements', async () => {
+    const result = await new StateCapability().execute(
+      commandOf('state.inspect', { rootSelector: '[id^="caris-tab-"]' }),
+      contextWith({
+        inspect: async () =>
+          err(RunnerErrors.elementAmbiguous('inspection root [id^="caris-tab-"]', 3)),
+      }),
+    );
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.code).toBe('ELEMENT_AMBIGUOUS');
+    expect(result.error.details).toMatchObject({ matchCount: 3 });
+  });
+
   it('still degrades for a read failure when no root was named', async () => {
     const result = await new StateCapability().execute(
       commandOf('state.inspect'),

@@ -110,6 +110,24 @@ export class PlaywrightBrowserAdapter implements BrowserPort {
         );
       }
 
+      /*
+       * Several matches is also a failure, not a first-match pick.
+       *
+       * A wildcard root is the normal way to name a panel with a generated id,
+       * and a slightly-too-broad one matches its siblings. Scanning the first
+       * would produce a registry draft for *a* panel with nothing in the file
+       * saying which — the same silent mis-scoping the missing-root check
+       * exists to prevent, and harder to notice because the output looks fine.
+       */
+      if (raw.rootMatchCount !== undefined && raw.rootMatchCount > 1) {
+        return err(
+          RunnerErrors.elementAmbiguous(
+            `inspection root ${options.rootSelector ?? ''}`,
+            raw.rootMatchCount,
+          ),
+        );
+      }
+
       const frames =
         options.includeFrames === true
           ? this.page
