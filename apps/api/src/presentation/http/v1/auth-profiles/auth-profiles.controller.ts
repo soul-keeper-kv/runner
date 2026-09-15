@@ -52,6 +52,26 @@ interface SaveAuthProfileBody {
    * cannot log a suite out. An empty string removes one.
    */
   readonly secrets?: Record<string, string>;
+  /**
+   * Where a token must end up for the application to accept it — a storage
+   * key, a cookie, a request header, or several at once.
+   *
+   * Required for `API_TOKEN`, because there is no portable default: an SPA
+   * reads storage during bootstrap, a server-rendered app reads a cookie, an
+   * API-first one wants the header. Guessing produces a login that reports
+   * success while every page still shows the sign-in screen.
+   */
+  readonly tokenPlacements?: AuthProfileView['tokenPlacements'];
+  /** A stored token, or a login endpoint to exchange credentials at. */
+  readonly tokenSource?: AuthProfileView['tokenSource'];
+  /**
+   * Headers added to every request the profile's browser makes.
+   *
+   * A value may name an entry in `secrets`/`secretRefs` instead of being
+   * literal, so a header carrying a credential is stored the same way a
+   * password is.
+   */
+  readonly extraHeaders?: AuthProfileView['extraHeaders'];
 }
 
 @Controller('api/v1/auth/profiles')
@@ -110,6 +130,11 @@ export class AuthProfilesController {
         ...(body.loginUrl === undefined ? {} : { loginUrl: body.loginUrl }),
         ...(body.secretRefs === undefined ? {} : { secretRefs: body.secretRefs }),
         ...(body.secrets === undefined ? {} : { secrets: body.secrets }),
+        ...(body.tokenPlacements === undefined
+          ? {}
+          : { tokenPlacements: body.tokenPlacements }),
+        ...(body.tokenSource === undefined ? {} : { tokenSource: body.tokenSource }),
+        ...(body.extraHeaders === undefined ? {} : { extraHeaders: body.extraHeaders }),
       }),
     );
   }
