@@ -87,12 +87,31 @@ export class CapabilityRegistry {
     const started = Date.now();
     const result = await capability.execute(command, context);
 
-    context.logger.debug('Live command dispatched', {
+    const outcome = {
       commandType,
       capability: capability.type,
       durationMs: Date.now() - started,
-      result: result.ok ? 'ok' : result.error.code,
-    });
+    };
+
+    if (result.ok) {
+      context.logger.debug('Live command dispatched', { ...outcome, result: 'ok' });
+    } else {
+      /*
+       * A failed command is logged at `warn`, not `debug`.
+       *
+       * It is the thing someone greps for when a client reports that nothing
+       * happened, and a deployment running at `info` — which is the default —
+       * would otherwise show the command being attempted and never show it
+       * failing. That silence sent a real debugging session chasing a
+       * transport bug when the answer was "no such auth profile".
+       */
+      context.logger.warn('Live command failed', {
+        ...outcome,
+        errorCode: result.error.code,
+        errorKind: result.error.kind,
+        reason: result.error.message,
+      });
+    }
 
     return result;
   }

@@ -540,6 +540,15 @@ function handleMessage(
           label: message.result.error?.code ?? 'command failed',
           detail: message.result.error?.message,
         });
+
+        // Also surfaced on the panel that issued it, not only in the event log.
+        // A failed login left the Live Session panel showing "not yet" with no
+        // reason, while the reason sat in a column the user was not reading.
+        set({
+          error: `${message.result.error?.code ?? 'Command failed'}: ${
+            message.result.error?.message ?? 'no reason given'
+          }`,
+        });
       }
       break;
     }
