@@ -79,6 +79,14 @@ interface ProfileDraft {
   /** `static` takes a token from the credentials above; `apiLogin` fetches one. */
   tokenKind: 'static' | 'apiLogin';
   tokenSecretRef: string;
+  /**
+   * The token itself, for a `static` source.
+   *
+   * Entered here rather than as a credential field elsewhere: asking only which
+   * field held it sent a real JWT into the header *prefix* box instead, which
+   * stored `Bearer eyJ…` as a literal prefix and left the secret empty.
+   */
+  tokenValue: string;
   tokenLoginUrl: string;
   tokenBodyTemplate: string;
   tokenPath: string;
@@ -106,6 +114,7 @@ const NEW_PROFILE: ProfileDraft = {
   headers: [],
   tokenKind: 'static',
   tokenSecretRef: 'token',
+  tokenValue: '',
   tokenLoginUrl: '',
   tokenBodyTemplate: '{"username":"{{username}}","password":"{{password}}"}',
   tokenPath: 'data.access_token',
@@ -171,6 +180,17 @@ export function AuthProfilePanel(): JSX.Element {
               tokenPlacements: placementsOf(draft),
             }
           : {}),
+        // A pasted token is a credential like any other, so it is sent as a
+        // secret under the name the source references. Only when typed: an
+        // untouched field must not clear the token already stored.
+        ...(usesToken && draft.tokenKind === 'static' && draft.tokenValue.length > 0
+          ? {
+              secrets: {
+                ...secrets,
+                [draft.tokenSecretRef.trim() || 'token']: draft.tokenValue,
+              },
+            }
+          : {}),
         ...(Object.keys(secrets).length > 0 ? { secrets } : {}),
       });
     },
@@ -218,6 +238,9 @@ export function AuthProfilePanel(): JSX.Element {
       tokenKind: source?.kind ?? NEW_PROFILE.tokenKind,
       tokenSecretRef:
         source?.kind === 'static' ? source.secretRef : NEW_PROFILE.tokenSecretRef,
+      // Left blank deliberately: the Runner never returns a stored token, so an
+      // empty field here means "keep the one you have".
+      tokenValue: '',
       tokenLoginUrl: source?.kind === 'apiLogin' ? source.url : '',
       tokenBodyTemplate:
         source?.kind === 'apiLogin'
@@ -436,17 +459,30 @@ export function AuthProfilePanel(): JSX.Element {
           </div>
 
           {draft.tokenKind === 'static' ? (
+            /*
+             * The token is entered *here*, not as a credential field above.
+             *
+             * An earlier version only asked which field held it, and left the
+             * user to add that field themselves in another section. Nobody
+             * guessed that, so a real JWT ended up pasted into the header
+             * *prefix* box instead — which stored `Bearer eyJ…` as a literal
+             * prefix and left the token secret empty, failing with "names token
+             * secret but it resolved to nothing".
+             */
             <div className="field">
-              <label htmlFor="ap-token-secret">Credential field holding the token</label>
+              <label htmlFor="ap-token-value">Token</label>
               <input
-                id="ap-token-secret"
-                value={draft.tokenSecretRef}
-                placeholder="token"
-                onChange={(event) => setDraft({ ...draft, tokenSecretRef: event.target.value })}
+                id="ap-token-value"
+                type="password"
+                autoComplete="new-password"
+                value={draft.tokenValue}
+                placeholder={editing === undefined ? 'paste the token' : 'unchanged'}
+                onChange={(event) => setDraft({ ...draft, tokenValue: event.target.value })}
               />
               <span className="muted">
-                Add a field above with this name and paste the token as its value. It is sealed
-                like a password, and the Runner never returns it.
+                Sealed like a password; the Runner never returns it. Paste the token only — the
+                <code> Bearer </code> scheme belongs in the placement below. A token expires, so
+                an endpoint exchange survives longer unattended.
               </span>
             </div>
           ) : (
@@ -513,12 +549,15 @@ export function AuthProfilePanel(): JSX.Element {
                   <>
                     <input
                       value={placement.name}
-                      placeholder="Authorization"
+                      placeholder="header name — Authorization"
                       onChange={(event) => updatePlacement(index, { name: event.target.value })}
                     />
                     <input
                       value={placement.prefix}
-                      placeholder="Bearer "
+                      // Labelled as a scheme, not an empty box: an unlabelled
+                      // field beside a header name reads as "the value", and a
+                      // whole JWT was pasted here once.
+                      placeholder="scheme only — Bearer "
                       onChange={(event) => updatePlacement(index, { prefix: event.target.value })}
                     />
                   </>
@@ -545,11 +584,18 @@ export function AuthProfilePanel(): JSX.Element {
                   </>
                 )}
               </div>
+              {placement.kind === 'header' && looksLikeAToken(placement.prefix) && (
+                <span className="warn-inline">
+                  That prefix looks like a token. Only the scheme belongs here —{' '}
+                  <code>Bearer </code> — and the token itself goes in the Token field above.
+                </span>
+              )}
               {placement.kind !== 'header' && placement.kind !== 'cookie' && (
                 <span className="muted">
-                  Storage key, then an optional JSON envelope with <code>{'{{token}}'}</code> — many
-                  apps keep <code>{'{"state":{"token":"…"}}'}</code>, and a bare string there reads
-                  as a corrupt session.
+                  Storage key, then the JSON envelope the app keeps, with{' '}
+                  <code>{'{{token}}'}</code> where the token belongs. Copy the shape from the
+                  running app rather than guessing: an envelope missing a flag the app checks
+                  leaves it redirecting to its login page while the Runner reports success.
                 </span>
               )}
             </div>
@@ -735,6 +781,19 @@ function placementsOf(draft: ProfileDraft): TokenPlacement[] {
         return [];
     }
   });
+}
+
+/**
+ * Does this look like someone pasted a token where a scheme belongs?
+ *
+ * Deliberately a hint rather than a validation: an unusual scheme is legal, and
+ * refusing one would be worse than a warning. But a long dotted string in the
+ * prefix box is almost always the mistake this catches — it happened, and the
+ * failure surfaced as "names token secret but it resolved to nothing".
+ */
+function looksLikeAToken(prefix: string): boolean {
+  const value = prefix.trim();
+  return value.length > 24 || value.split('.').length >= 3;
 }
 
 function describe(cause: unknown): string {
