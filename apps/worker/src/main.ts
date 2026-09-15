@@ -13,6 +13,7 @@ import {
 } from '@runner/infrastructure-redis';
 import { AuthService } from './modules/auth/auth-service.js';
 import { AuthenticatedStateHandler } from './modules/auth/authenticated-state-handler.js';
+import { AuthCapability } from './capabilities/auth/auth-capability.js';
 import { EnvSecretProvider } from './infrastructure/secrets/env-secret-provider.js';
 import { SessionManager } from './modules/session/session-manager.js';
 import { DomInspector } from './modules/inspector/dom-inspector.js';
@@ -198,6 +199,11 @@ async function bootstrap(): Promise<void> {
   // Phase 11: recording a session into Test IR. The client reports what the user
   // did — nothing is injected into the page under test.
   capabilities.register(new RecordingCapability(new InteractionRecorder(logger)));
+  // Phase 5 in a live session: a session started from a profile opens with that
+  // profile's stored session applied, and this capability covers the two cases
+  // that need a command — a profile logging in for the very first time, and an
+  // application that signed the user out while the view stayed open.
+  capabilities.register(new AuthCapability(auth, storageStates));
 
   logger.info('Live capabilities registered', {
     commands: capabilities.supportedCommands().length,
@@ -220,6 +226,10 @@ async function bootstrap(): Promise<void> {
     capabilities,
     systemClock,
     logger,
+    DEFAULT_LIVE_RUNTIME_OPTIONS,
+    // So a session that names a profile opens with that profile's stored
+    // session already applied, rather than on a login page.
+    auth,
   );
 
   const liveTransport = new RedisLiveCommandTransport(redisUrl, logger);

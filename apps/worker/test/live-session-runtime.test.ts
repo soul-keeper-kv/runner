@@ -87,6 +87,10 @@ function fakeSessions(session: LiveSession | undefined) {
     get updates() {
       return updates;
     },
+    /** The session as the store now holds it, so a write is observable. */
+    get current() {
+      return current;
+    },
   };
 }
 
@@ -303,5 +307,232 @@ describe('reaping idle sessions', () => {
 
     expect(browsers.released).toEqual(['bs_1']);
     expect(runtime.activeSessions()).toEqual([]);
+  });
+});
+
+/**
+ * Phase 5 in a live session.
+ *
+ * The bug these pin: `acquireFor` carried a "Phase 5 resolves storageState
+ * here" comment and no code, so a session started with an auth profile opened a
+ * clean browser and every navigation landed on a login page — while every test
+ * above still passed, because none of them named a profile.
+ */
+describe('opening a live session authenticated', () => {
+  /** Records the launch options, so an applied session is observable. */
+  function recordingBrowsers() {
+    const launches = [];
+
+    const manager = {
+      acquire: async (options) => {
+        launches.push(options);
+        return ok({ sessionId: `bs_${launches.length}` });
+      },
+      release: async () => undefined,
+      get: () => undefined,
+      shutdown: async () => undefined,
+    };
+
+    return { manager, launches };
+  }
+
+  function authWith(state) {
+    return {
+      storageStateFor: async () => ok(state),
+    };
+  }
+
+  function runtimeFor(session, auth) {
+    const clock = fixedClock('2026-01-01T00:00:00.000Z');
+    const browsers = recordingBrowsers();
+    const sessions = fakeSessions(session);
+    const capabilities = new CapabilityRegistry(noopLogger);
+    capabilities.register(recordingCapability().capability);
+
+    const runtime = new LiveSessionRuntime(
+      browsers.manager,
+      sessions.store,
+      capabilities,
+      clock,
+      noopLogger,
+      undefined,
+      auth,
+    );
+
+    return { runtime, browsers, sessions };
+  }
+
+  it('applies the profile stored session, so a gated page renders', async () => {
+    const stored = { cookies: [{ name: 'session', value: 'restored' }] };
+    const { runtime, browsers } = runtimeFor(
+      sessionWith({ authProfileRef: 'MANAGER' }),
+      authWith(stored),
+    );
+
+    await runtime.handle(commandOf('browser.navigate'));
+
+    expect(browsers.launches).toHaveLength(1);
+    expect(browsers.launches[0]?.storageState).toEqual(stored);
+  });
+
+  it('records the session as authenticated only when one was restored', async () => {
+    const { runtime, sessions } = runtimeFor(
+      sessionWith({ authProfileRef: 'MANAGER' }),
+      authWith({ cookies: [] }),
+    );
+
+    await runtime.handle(commandOf('browser.navigate'));
+
+    expect(sessions.current?.authenticatedAs).toBe('MANAGER');
+  });
+
+  it('opens unauthenticated when nothing is stored yet, rather than refusing', async () => {
+    // auth.login can then log in *into this browser*. Refusing to open one
+    // would leave a user with no way to authenticate at all.
+    const { runtime, browsers, sessions } = runtimeFor(
+      sessionWith({ authProfileRef: 'MANAGER' }),
+      authWith(undefined),
+    );
+
+    const result = await runtime.handle(commandOf('browser.navigate'));
+
+    expect(result.ok).toBe(true);
+    expect(browsers.launches[0]?.storageState).toBeUndefined();
+    // And it must not claim an authentication that never happened.
+    expect(sessions.current?.authenticatedAs).toBeUndefined();
+  });
+
+  it('does not claim authentication when no secret provider is configured', async () => {
+    const { runtime, browsers, sessions } = runtimeFor(
+      sessionWith({ authProfileRef: 'MANAGER' }),
+      undefined,
+    );
+
+    const result = await runtime.handle(commandOf('browser.navigate'));
+
+    expect(result.ok).toBe(true);
+    expect(browsers.launches[0]?.storageState).toBeUndefined();
+    expect(sessions.current?.authenticatedAs).toBeUndefined();
+  });
+
+  it('launches a clean browser for a session with no profile', async () => {
+    const { runtime, browsers } = runtimeFor(sessionWith(), authWith({ cookies: [] }));
+
+    await runtime.handle(commandOf('browser.navigate'));
+
+    // A session that asked for nothing must not inherit another profile's
+    // cookies: that would leak one tenant's authentication into another view.
+    expect(browsers.launches[0]?.storageState).toBeUndefined();
+  });
+
+  it('persists what a capability changed about the session', async () => {
+    const clock = fixedClock('2026-01-01T00:00:00.000Z');
+    const browsers = recordingBrowsers();
+    const sessions = fakeSessions(sessionWith({ authProfileRef: 'MANAGER' }));
+    const capabilities = new CapabilityRegistry(noopLogger);
+
+    // Stands in for AuthCapability: it reports a completed login through the
+    // context rather than writing to the store, so the runtime stays the only
+    // writer of the session record.
+    capabilities.register({
+      type: 'auth',
+      handles: ['auth.login'],
+      execute: async (_command, context) => {
+        context.patchSession?.({ authenticatedAs: 'MANAGER' });
+        return ok({ fromStoredSession: false });
+      },
+    });
+
+    const runtime = new LiveSessionRuntime(
+      browsers.manager,
+      sessions.store,
+      capabilities,
+      clock,
+      noopLogger,
+      undefined,
+      authWith(undefined),
+    );
+
+    await runtime.handle(commandOf('auth.login'));
+
+    expect(sessions.current?.authenticatedAs).toBe('MANAGER');
+  });
+});
+
+/**
+ * The reporting bug this pins: a live session opened from a stored session
+ * reported itself as *not* authenticated on its first command.
+ *
+ * `acquireFor` sets `authenticatedAs` when it restores a session, but the
+ * record the runtime read before acquiring predates that write — so the first
+ * capability to run was handed a stale session and answered "not
+ * authenticated" about a browser that was already logged in. Exactly the
+ * confusion `authenticatedAs` exists to prevent, and only visible in a real run.
+ */
+describe('what a capability is told about the session', () => {
+  it('sees the authentication that acquiring the browser just recorded', async () => {
+    const clock = fixedClock('2026-01-01T00:00:00.000Z');
+    const browsers = fakeBrowsers();
+    const sessions = fakeSessions(sessionWith({ authProfileRef: 'MANAGER' }));
+    const capabilities = new CapabilityRegistry(noopLogger);
+
+    const seen = [];
+    capabilities.register({
+      type: 'auth',
+      handles: ['auth.status'],
+      execute: async (_command, context) => {
+        seen.push(context.session.authenticatedAs);
+        return ok({ fromStoredSession: context.session.authenticatedAs !== undefined });
+      },
+    });
+
+    const runtime = new LiveSessionRuntime(
+      browsers.manager,
+      sessions.store,
+      capabilities,
+      clock,
+      noopLogger,
+      undefined,
+      { storageStateFor: async () => ok({ cookies: [] }) },
+    );
+
+    const result = await runtime.handle(commandOf('auth.status'));
+
+    expect(result.ok).toBe(true);
+    expect(seen).toEqual(['MANAGER']);
+    expect(result.result).toEqual({ fromStoredSession: true });
+  });
+
+  it('still answers when the session cannot be re-read', async () => {
+    // A store hiccup must not fail a command whose browser is already held.
+    const clock = fixedClock('2026-01-01T00:00:00.000Z');
+    const browsers = fakeBrowsers();
+    const sessions = fakeSessions(sessionWith());
+    const capabilities = new CapabilityRegistry(noopLogger);
+    capabilities.register(recordingCapability().capability);
+
+    let reads = 0;
+    const flaky = {
+      ...sessions.store,
+      get: async (sessionId) => {
+        reads += 1;
+        // The first read succeeds; the re-read after acquiring fails.
+        return reads === 1
+          ? sessions.store.get(sessionId)
+          : err(RunnerErrors.internal('store unavailable'));
+      },
+    };
+
+    const runtime = new LiveSessionRuntime(
+      browsers.manager,
+      flaky,
+      capabilities,
+      clock,
+      noopLogger,
+    );
+
+    const result = await runtime.handle(commandOf('browser.navigate'));
+
+    expect(result.ok).toBe(true);
   });
 });

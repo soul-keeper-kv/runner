@@ -26,6 +26,15 @@ export interface LiveSessionContext {
   readonly session: LiveSession;
   readonly browser: BrowserPort;
   readonly logger: Logger;
+  /**
+   * Records what a capability changed about the session itself.
+   *
+   * Only `auth` uses it so far, and only for `authenticatedAs`: the runtime
+   * owns the session record, so a capability that wrote to the store directly
+   * would race the revision the runtime is about to publish. Returning the
+   * patch through the runtime keeps one writer.
+   */
+  patchSession?(patch: Partial<Pick<LiveSession, 'authenticatedAs'>>): void;
 }
 
 export interface LiveCapability<TResult = unknown> {
