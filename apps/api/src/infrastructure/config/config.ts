@@ -18,6 +18,15 @@ export interface ApiConfig {
   readonly redisUrl: string;
   /** In-memory adapters let the API run with no Postgres or Redis present. */
   readonly usePersistence: boolean;
+  /**
+   * Key that seals stored credentials (blueprint section 50, relaxed).
+   *
+   * Empty means managed auth profiles are unavailable: the routes answer 501
+   * rather than storing a password the Runner cannot protect. That refusal is
+   * the point — a deployment that "forgot" the key must not quietly become one
+   * that keeps credentials readable.
+   */
+  readonly secretKey: string;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
@@ -42,6 +51,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
     databaseUrl,
     redisUrl,
     usePersistence: databaseUrl !== '' && redisUrl !== '',
+    secretKey: env.RUNNER_SECRET_KEY ?? '',
   };
 }
 

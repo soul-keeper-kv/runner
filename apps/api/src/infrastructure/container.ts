@@ -1,5 +1,6 @@
 import { Redis } from 'ioredis';
 import type {
+  AuthProfileStorePort,
   ExecutionQueuePort,
   ExecutionStorePort,
   InspectionQueuePort,
@@ -9,7 +10,11 @@ import type {
   SessionStorePort,
 } from '@runner/application';
 import { createSchemaRegistry, type SchemaRegistry } from '@runner/contracts-internal';
-import { PostgresRegistryStore, createPostgresClient } from '@runner/infrastructure-postgres';
+import {
+  PostgresAuthProfileStore,
+  PostgresRegistryStore,
+  createPostgresClient,
+} from '@runner/infrastructure-postgres';
 import {
   RedisExecutionStore,
   RedisInspectionStore,
@@ -17,7 +22,13 @@ import {
   RedisRegistryStore,
   RedisSessionStore,
 } from '@runner/infrastructure-redis';
-import { createConsoleLogger, systemClock, type Clock, type Logger } from '@runner/shared';
+import {
+  createConsoleLogger,
+  createSecretBox,
+  systemClock,
+  type Clock,
+  type Logger,
+} from '@runner/shared';
 import type { ApiConfig } from './config/config.js';
 import { InMemoryExecutionStore } from './persistence/in-memory-execution-store.js';
 import { InMemoryInspectionStore } from './persistence/in-memory-inspection-store.js';
@@ -45,6 +56,11 @@ export interface ApiContainer {
   readonly executionStore: ExecutionStorePort;
   readonly inspectionStore: InspectionStorePort;
   readonly registryStore: RegistryPort;
+  /**
+   * Undefined without Postgres *or* without an encryption key: the routes then
+   * answer 501 rather than storing a credential the Runner cannot protect.
+   */
+  readonly authProfileStore: AuthProfileStorePort | undefined;
   readonly sessionStore: SessionStorePort;
   /** Undefined when no Redis is configured: live commands need the worker. */
   readonly liveCommands: LiveCommandTransportPort | undefined;
@@ -132,6 +148,36 @@ export function createContainer(config: ApiConfig): ApiContainer {
     );
   }
 
+  /*
+   * Managed auth profiles need Postgres *and* an encryption key.
+   *
+   * There is deliberately no in-memory or unencrypted fallback. A credential
+   * the Runner cannot protect must not be stored at all, so a deployment
+   * missing either one gets a 501 naming what is missing — which is a far
+   * better outcome than a database quietly holding readable passwords.
+   */
+  const secretBox =
+    config.secretKey === '' ? undefined : createSecretBox(config.secretKey);
+
+  if (secretBox !== undefined && !secretBox.ok) {
+    // A key too short to protect anything is a configuration error, and saying
+    // so at startup beats discovering it on the first save.
+    logger.error(secretBox.error.message);
+  }
+
+  const authProfileStore: AuthProfileStorePort | undefined =
+    postgres !== undefined && secretBox?.ok === true
+      ? new PostgresAuthProfileStore(postgres, secretBox.value, clock, logger)
+      : undefined;
+
+  if (authProfileStore === undefined) {
+    logger.warn(
+      config.secretKey === ''
+        ? 'No RUNNER_SECRET_KEY: auth profiles cannot be managed over the API. Declare profiles in the worker\'s RUNNER_AUTH_PROFILES instead.'
+        : 'Managed auth profiles are unavailable: they need DATABASE_URL and a valid RUNNER_SECRET_KEY.',
+    );
+  }
+
   return {
     config,
     logger,
@@ -140,6 +186,7 @@ export function createContainer(config: ApiConfig): ApiContainer {
     executionStore,
     inspectionStore,
     registryStore,
+    authProfileStore,
     sessionStore,
     liveCommands,
     executionQueue,

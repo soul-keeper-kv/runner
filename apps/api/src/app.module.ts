@@ -11,6 +11,7 @@ import { ExecutionsController } from './presentation/http/v1/executions/executio
 import { ExecutionEventsController } from './presentation/http/v1/executions/execution-events.controller.js';
 import { InspectionsController } from './presentation/http/v1/inspections/inspections.controller.js';
 import { LiveSessionsController } from './presentation/http/v1/live-sessions/live-sessions.controller.js';
+import { AuthProfilesController } from './presentation/http/v1/auth-profiles/auth-profiles.controller.js';
 import { RegistryController } from './presentation/http/v1/registry/registry.controller.js';
 
 /**
@@ -34,6 +35,7 @@ export class AppModule {
         ExecutionEventsController,
         InspectionsController,
         LiveSessionsController,
+        AuthProfilesController,
         RegistryController,
       ],
       providers: [
