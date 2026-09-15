@@ -5,6 +5,7 @@ export * from './live-command-transport-port.js';
 export * from './session-store-port.js';
 export * from './artifact-storage-port.js';
 export * from './secret-provider-port.js';
+export * from './auth-profile-store-port.js';
 export * from './storage-state-store-port.js';
 export * from './semantic-resolver-port.js';
 export * from './execution-store-port.js';
