@@ -120,6 +120,26 @@ runtime applies that profile's stored session when it opens the browser, and
 stored yet or the application signed the user out. `scripts/auth-demo.mjs`
 demonstrates the whole path against a fixture app whose page is genuinely gated
 on a session cookie.
+
+## Auth profiles: two sources, one of them relaxes a rule
+
+A profile can come from the worker's `RUNNER_AUTH_PROFILES`, where a credential
+never leaves the environment, or from `/api/v1/auth/profiles`, where a user
+manages profiles from the workspace UI. Storage wins when both define one.
+
+The managed half **deliberately relaxes rule 5**: a credential does reach the
+database, sealed with AES-256-GCM under `RUNNER_SECRET_KEY`, which is held in
+the environment and never stored beside the data. What did not move:
+
+- **A credential goes in and never comes out.** Reads answer `secretsPresent` —
+  field names. `resolveForExecution` is the only method that decrypts, so an
+  audit has one call site to read.
+- **No unencrypted fallback.** Without the key the routes answer `501` naming
+  what is missing. A deployment that forgot it must not quietly become one that
+  keeps passwords readable.
+- **Form fields are named, never selected.** A profile says
+  `{"username":"USERNAME *"}` — an accessible name the locator engine resolves
+  like any other target.
 Leave a namespace unregistered until it works: an unregistered command returns
 `LIVE_COMMAND_UNSUPPORTED` naming it, which tells a client developer more than a
 silent no-op.

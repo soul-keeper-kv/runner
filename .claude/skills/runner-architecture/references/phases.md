@@ -15,7 +15,7 @@ so there is something to compare a model's answer against.
 | 3 | Locator engine: generate, score, validate, resolve | **Done** |
 | 3.5 | Page inspection API: URL in, draft registry entries out | **Done** |
 | 4 | Registry: stable ids, names, aliases, fallbacks, history | **Done** |
-| 5 | Authentication: `storageState`, form login, profiles | **Done** (FORM_LOGIN + STORAGE_STATE; executions, inspections and live sessions) |
+| 5 | Authentication: `storageState`, form login, profiles | **Done** (FORM_LOGIN + STORAGE_STATE; executions, inspections and live sessions; profiles managed over the API or declared in the environment) |
 | 6 | Preconditions: handlers, explicit pre-steps | **Done** (entityState needs a seeding port) |
 | 7 | LiveSession: capability dispatch wired end to end | **Done** (browser, selector, state, element, registry, recording, auth) |
 | 8 | Live preview: screenshot view, bbox highlight, confirm/reject | **Done** (view + highlight) |
