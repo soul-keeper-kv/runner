@@ -8,6 +8,13 @@ import { CONTAINER } from '../../../../infrastructure/container.token.js';
 interface CreateLiveSessionBody {
   readonly workspaceRef?: string;
   readonly executionId?: string;
+  /**
+   * Opens the session already authenticated as this execution profile.
+   *
+   * A profile reference, never a credential: the worker resolves it against
+   * its own secret provider, so nothing sensitive crosses this route.
+   */
+  readonly authProfileRef?: string;
   readonly ttlSeconds?: number;
 }
 
@@ -41,6 +48,7 @@ export class LiveSessionsController {
     const session = await startLiveSession(this.deps(), {
       workspaceRef: body.workspaceRef,
       ...(body.executionId === undefined ? {} : { executionId: body.executionId }),
+      ...(body.authProfileRef === undefined ? {} : { authProfileRef: body.authProfileRef }),
       ...(body.ttlSeconds === undefined ? {} : { ttlSeconds: body.ttlSeconds }),
     });
     return unwrapOrThrow(session);

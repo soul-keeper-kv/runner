@@ -29,6 +29,15 @@ export interface LiveSessionDeps {
 export interface StartLiveSessionInput {
   readonly workspaceRef: string;
   readonly executionId?: string;
+  /**
+   * Opens the session authenticated as this execution profile, so a live view
+   * can reach a page that only exists behind a login.
+   *
+   * A reference, never a credential. The worker resolves it against its secret
+   * provider; the API never sees a password, and neither does the client that
+   * asked for the session.
+   */
+  readonly authProfileRef?: string;
   /** Session lifetime; live sessions hold a browser, so they must expire. */
   readonly ttlSeconds?: number;
 }
@@ -47,6 +56,7 @@ export async function startLiveSession(
     workspaceRef: input.workspaceRef,
     browserSessionId: newId('bs'),
     ...(input.executionId === undefined ? {} : { executionId: input.executionId }),
+    ...(input.authProfileRef === undefined ? {} : { authProfileRef: input.authProfileRef }),
     executionState: 'IDLE',
     revision: 0,
     createdAt: new Date(now).toISOString(),
@@ -60,6 +70,9 @@ export async function startLiveSession(
   deps.logger.info('Live session started', {
     sessionId: session.id,
     workspaceRef: input.workspaceRef,
+    // The profile ref is safe to log; the credential it points at never
+    // reaches this process.
+    ...(input.authProfileRef === undefined ? {} : { authProfileRef: input.authProfileRef }),
   });
   return ok(created.value);
 }
