@@ -1,0 +1,151 @@
+# The whole Runner Service: datastores, migrations, API, worker, workspace.
+#
+#   pnpm up          build and start everything
+#   pnpm down        stop it
+#   pnpm logs        follow
+#
+# Open http://localhost:5173 for the live workspace, or talk to the API directly
+# on http://localhost:3001.
+#
+# `infra/docker-compose.yml` still exists and still does what it always did —
+# datastores only, for running the apps from source with `pnpm dev`. This file is
+# the other half: everything in containers, nothing needed on the host but Docker.
+
+name: runner-service-full
+
+x-app-env: &app-env
+  # Service names and *container* ports, not the host mappings: inside the
+  # compose network each container resolves the others by name, and `localhost`
+  # would mean the container itself.
+  DATABASE_URL: postgresql://runner:runner@postgres:5432/runner
+  REDIS_URL: redis://redis:6379
+  RUNNER_LOG_LEVEL: ${RUNNER_LOG_LEVEL:-info}
+  # `loadConfig` refuses to start in production without both URLs above, rather
+  # than silently falling back to in-memory storage. That refusal is wanted here.
+  NODE_ENV: production
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: runner-full-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: runner
+      POSTGRES_PASSWORD: runner
+      POSTGRES_DB: runner
+      POSTGRES_INITDB_ARGS: '--encoding=UTF8 --locale=C'
+    ports:
+      # Same non-default host port as the infra-only compose file, so a developer
+      # can point psql at one place regardless of which they started.
+      - '5433:5432'
+    volumes:
+      - runner-full-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U runner -d runner']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: runner-full-redis
+    restart: unless-stopped
+    # BullMQ needs keyspace notifications for delayed and stalled jobs.
+    command: redis-server --appendonly yes --notify-keyspace-events Ex
+    ports:
+      - '6380:6379'
+    volumes:
+      - runner-full-redis-data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # Runs once and exits. The API waits for it to *succeed*, so no process ever
+  # queries a schema that has not been applied — the failure mode this avoids is
+  # a confusing "relation does not exist" on the first request.
+  migrate:
+    build:
+      context: .
+      target: api
+    image: runner-service/api:local
+    container_name: runner-full-migrate
+    environment:
+      <<: *app-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # The migration runner is TypeScript run through tsx in development; in the
+    # image it is the compiled schema bootstrap the API package ships.
+    command: ['node', 'apps/api/dist/infrastructure/persistence/migrate.js']
+    restart: 'no'
+
+  api:
+    build:
+      context: .
+      target: api
+    image: runner-service/api:local
+    container_name: runner-full-api
+    restart: unless-stopped
+    environment:
+      <<: *app-env
+      RUNNER_API_PORT: '3001'
+    ports:
+      - '3001:3001'
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  worker:
+    build:
+      context: .
+      target: worker
+    image: runner-service/worker:local
+    container_name: runner-full-worker
+    restart: unless-stopped
+    environment:
+      <<: *app-env
+      RUNNER_WORKER_CONCURRENCY: ${RUNNER_WORKER_CONCURRENCY:-2}
+      RUNNER_BROWSER_HEADLESS: ${RUNNER_BROWSER_HEADLESS:-true}
+      # Auth profiles reference credentials by environment-variable NAME, so the
+      # profile JSON is safe to put here while the secrets stay in the host env.
+      RUNNER_AUTH_PROFILES: ${RUNNER_AUTH_PROFILES:-}
+    # Chromium needs more than Docker's default 64MB of shared memory; without
+    # this it crashes on pages with large composited layers.
+    shm_size: 1gb
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    # The worker is reached only through Redis and exposes no port, which is
+    # what keeps the public surface exactly one process wide.
+
+  live-web:
+    build:
+      context: .
+      target: live-web
+    image: runner-service/live-web:local
+    container_name: runner-full-live-web
+    restart: unless-stopped
+    environment:
+      RUNNER_API_HOST: api
+      RUNNER_API_PORT: '3001'
+    ports:
+      # 5173 on the host matches the Vite dev port, so the bookmark is the same
+      # whichever way the workspace is running.
+      - '5173:80'
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  runner-full-postgres-data:
+  runner-full-redis-data:

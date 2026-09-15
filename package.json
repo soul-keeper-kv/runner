@@ -23,6 +23,11 @@
     "infra:up": "docker compose -f infra/docker-compose.yml up -d",
     "infra:down": "docker compose -f infra/docker-compose.yml down",
     "infra:logs": "docker compose -f infra/docker-compose.yml logs -f",
+    "up": "docker compose up -d --build",
+    "down": "docker compose down",
+    "logs": "docker compose logs -f",
+    "ps": "docker compose ps",
+    "restart": "docker compose up -d --build --force-recreate",
     "db:generate": "pnpm --filter @runner/api exec drizzle-kit generate",
     "db:migrate": "pnpm --filter @runner/api run db:migrate",
     "contracts:check": "pnpm --filter @runner/contracts-internal run test"

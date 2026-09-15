@@ -1,0 +1,47 @@
+# Keep the build context small and the layer cache stable.
+#
+# Everything here is either regenerated inside the image (node_modules, dist) or
+# irrelevant to a build (logs, editor state). Shipping node_modules would also
+# be wrong, not just slow: it holds platform-specific binaries built for the
+# host, and Playwright's browsers must come from the image's own base.
+
+node_modules
+**/node_modules
+
+dist
+**/dist
+build
+**/build
+coverage
+**/coverage
+.turbo
+**/.turbo
+
+# `*.tsbuildinfo` alone matches only the context root. These files sit next to
+# each package's tsconfig (composite + incremental are on in tsconfig.base.json),
+# so without the `**/` form they ride into the image, and tsc then believes every
+# package is already emitted and skips emit — leaving dependents to fail with
+# TS2307 on a package that just reported a successful build.
+*.tsbuildinfo
+**/*.tsbuildinfo
+
+.git
+.github
+.vscode
+.idea
+
+# Local environment and secrets never belong in an image.
+.env
+.env.local
+.env.*.local
+
+.runner-artifacts
+playwright-report
+test-results
+*.log
+**/*.log
+
+# Docs and scratch files do not affect the build.
+docs
+README.md
+.claude
