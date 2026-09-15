@@ -1,3 +1,4 @@
+import { AuthProfilePanel } from '../features/auth-profiles/AuthProfilePanel.js';
 import { CapabilitiesPanel } from '../features/live-browser/CapabilitiesPanel.js';
 import { LivePreview } from '../features/live-browser/LivePreview.js';
 import { LiveSessionPanel } from '../features/live-session/LiveSessionPanel.js';
@@ -32,6 +33,7 @@ export function App(): JSX.Element {
           <InspectionPanel />
           <CapabilitiesPanel />
           <LiveSessionPanel />
+          <AuthProfilePanel />
         </div>
 
         <div className="column">

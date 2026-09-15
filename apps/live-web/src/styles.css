@@ -552,3 +552,53 @@ button.link {
   color: var(--warn);
   white-space: nowrap;
 }
+
+/* --- Auth profiles ------------------------------------------------------- */
+
+.profile-list {
+  list-style: none;
+  margin: 0 0 1rem;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.profile-list li {
+  border: 1px solid var(--border, #2a2f3a);
+  border-radius: 6px;
+  padding: 0.6rem 0.7rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.profile-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+/* Which credentials are set — names only; a value never reaches this page. */
+.profile-secrets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+
+/*
+ * Credential key, page field name, value — side by side, because reading them
+ * as a row is what makes the mapping obvious.
+ */
+.profile-field-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 0.4rem;
+}
+
+@media (max-width: 720px) {
+  .profile-field-row {
+    grid-template-columns: 1fr;
+  }
+}

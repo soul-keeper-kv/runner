@@ -129,6 +129,43 @@ export interface InspectionResult {
   completedAt?: string;
 }
 
+export type AuthStrategy =
+  | 'FORM_LOGIN'
+  | 'API_TOKEN'
+  | 'COOKIE'
+  | 'STORAGE_STATE'
+  | 'OAUTH'
+  | 'SSO';
+
+/**
+ * A profile as the Runner reports it.
+ *
+ * `secretsPresent` is field *names*, never values — that is the whole reason a
+ * profile is safe to list in a browser at all.
+ */
+export interface AuthProfile {
+  ref: string;
+  workspaceRef: string;
+  displayName: string;
+  strategy: AuthStrategy;
+  loginUrl?: string;
+  formFields: Record<string, string>;
+  secretsPresent: string[];
+  secretRefs: Record<string, string>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SaveAuthProfileBody {
+  displayName?: string;
+  strategy: AuthStrategy;
+  loginUrl?: string;
+  formFields?: Record<string, string>;
+  secretRefs?: Record<string, string>;
+  /** Omitted fields keep their value; an empty string removes one. */
+  secrets?: Record<string, string>;
+}
+
 export interface LiveSession {
   id: string;
   workspaceRef: string;
@@ -244,6 +281,37 @@ export const runnerApi = {
       method: 'POST',
       body: JSON.stringify({ workspaceRef, executionId, authProfileRef }),
     });
+  },
+
+  /**
+   * Auth profiles.
+   *
+   * `secrets` goes one way only: the Runner never returns a stored value, so
+   * the editor shows "set" or "missing" and asks again when a user wants to
+   * change one. A password typed here reaches the Runner and stops there.
+   */
+  listAuthProfiles(workspaceRef: string): Promise<{ profiles: AuthProfile[] }> {
+    return request(
+      `/api/v1/auth/profiles?workspaceRef=${encodeURIComponent(workspaceRef)}`,
+    );
+  },
+
+  saveAuthProfile(
+    workspaceRef: string,
+    profileRef: string,
+    body: SaveAuthProfileBody,
+  ): Promise<AuthProfile> {
+    return request(
+      `/api/v1/auth/profiles/${encodeURIComponent(profileRef)}?workspaceRef=${encodeURIComponent(workspaceRef)}`,
+      { method: 'PUT', body: JSON.stringify(body) },
+    );
+  },
+
+  deleteAuthProfile(workspaceRef: string, profileRef: string): Promise<void> {
+    return request(
+      `/api/v1/auth/profiles/${encodeURIComponent(profileRef)}?workspaceRef=${encodeURIComponent(workspaceRef)}`,
+      { method: 'DELETE' },
+    );
   },
 
   getLiveSession(sessionId: string): Promise<LiveSession> {

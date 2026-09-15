@@ -1,5 +1,7 @@
 import { useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { useLiveSessionStore } from '../../stores/live-session-store.js';
+import { runnerApi } from '../../lib/runner-api.js';
 
 /**
  * Live session lifecycle controls (blueprint section 26).
@@ -26,6 +28,23 @@ export function LiveSessionPanel(): JSX.Element {
   const navigate = useLiveSessionStore((state) => state.navigate);
   const login = useLiveSessionStore((state) => state.login);
 
+  /**
+   * The profiles this deployment actually has.
+   *
+   * Offered as a list rather than a text box because the previous version was a
+   * text box: a mistyped ref looked identical to a missing profile, and the only
+   * feedback was a failed login. `retry: false` because a 501 here just means
+   * profiles are declared in the worker's environment instead — a normal
+   * configuration, not an error worth retrying.
+   */
+  const profiles = useQuery({
+    queryKey: ['auth-profiles', workspaceRef],
+    queryFn: () => runnerApi.listAuthProfiles(workspaceRef),
+    retry: false,
+    enabled: session === undefined,
+  });
+
+  const available = profiles.data?.profiles ?? [];
   const profileRef = session?.authProfileRef;
 
   return (
@@ -47,16 +66,34 @@ export function LiveSessionPanel(): JSX.Element {
           </div>
           <div className="field">
             <label htmlFor="auth-profile">Auth profile (optional)</label>
-            <input
-              id="auth-profile"
-              value={authProfileRef}
-              placeholder="MANAGER"
-              onChange={(event) => setAuthProfileRef(event.target.value)}
-            />
+            {available.length > 0 ? (
+              <select
+                id="auth-profile"
+                value={authProfileRef}
+                onChange={(event) => setAuthProfileRef(event.target.value)}
+              >
+                <option value="">— none, browse unauthenticated —</option>
+                {available.map((profile) => (
+                  <option key={profile.ref} value={profile.ref}>
+                    {profile.ref} — {profile.displayName}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <input
+                id="auth-profile"
+                value={authProfileRef}
+                placeholder="MANAGER"
+                onChange={(event) => setAuthProfileRef(event.target.value)}
+              />
+            )}
             <span className="muted">
               Opens the browser with this profile&apos;s stored session, so a page behind a login
-              renders. Declared in <code>RUNNER_AUTH_PROFILES</code> on the worker — the password
-              never reaches this page.
+              renders.{' '}
+              {available.length > 0
+                ? 'Managed in the Auth Profiles panel below.'
+                : 'Declared in the worker’s RUNNER_AUTH_PROFILES, or managed in the Auth Profiles panel below.'}{' '}
+              A password never reaches this page.
             </span>
           </div>
           <button
