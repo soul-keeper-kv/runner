@@ -5,6 +5,7 @@ import {
   type InspectionElement,
   type InspectionResult,
 } from '../../lib/runner-api.js';
+import { downloadJson, filenameForUrl } from '../../lib/registry-export.js';
 
 /**
  * Inspect a URL and show the registry entries it produced.
@@ -179,9 +180,24 @@ function InspectionReport({ result }: { result: InspectionResult }): JSX.Element
             </div>
           )}
         </div>
-        <button type="button" className="secondary" onClick={copyJson}>
-          {copied ? 'Copied' : 'Copy JSON'}
-        </button>
+        <div className="button-row">
+          <button type="button" className="secondary" onClick={copyJson}>
+            {copied ? 'Copied' : 'Copy JSON'}
+          </button>
+          {/*
+            The same entries as Copy, as a file. An inspection is the fastest
+            way to get a complete registry draft for a page — every element
+            already named, ranked and scored — and until now the only way out of
+            this panel was the clipboard.
+          */}
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => downloadJson(result, filenameForUrl(result.url, 'inspection'))}
+          >
+            Download JSON
+          </button>
+        </div>
       </div>
 
       <p className="muted small">

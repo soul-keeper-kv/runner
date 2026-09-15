@@ -25,6 +25,11 @@ export function LivePreview(): JSX.Element {
   const togglePicking = useLiveSessionStore((state) => state.togglePicking);
   const pickAt = useLiveSessionStore((state) => state.pickAt);
   const picked = useLiveSessionStore((state) => state.picked);
+  const scan = useLiveSessionStore((state) => state.scan);
+  const scanned = useLiveSessionStore((state) => state.scanned);
+  const scanAll = useLiveSessionStore((state) => state.scanAll);
+  const cancelScan = useLiveSessionStore((state) => state.cancelScan);
+  const downloadRegistry = useLiveSessionStore((state) => state.downloadRegistry);
 
   if (session === undefined) {
     return (
@@ -52,11 +57,51 @@ export function LivePreview(): JSX.Element {
           <button type="button" onClick={() => toggleCandidates()}>
             {showCandidates ? 'Hide elements' : 'Show elements'}
           </button>
+          {/*
+            One button for the whole page: list every element, then rank each
+            one's selectors. The cancel replaces it while it runs, because a
+            scan drives a real browser and the user must be able to stop it.
+          */}
+          {scan?.running === true ? (
+            <button type="button" className="danger" onClick={() => cancelScan()}>
+              Stop scan
+            </button>
+          ) : (
+            <button type="button" onClick={() => void scanAll()}>
+              Scan all elements
+            </button>
+          )}
+          <button
+            type="button"
+            className="secondary"
+            disabled={scanned === undefined || scanned.length === 0}
+            onClick={() => downloadRegistry()}
+          >
+            Download registry JSON
+          </button>
           <button type="button" onClick={() => refresh()}>
             Refresh
           </button>
         </div>
       </header>
+
+      {scan !== undefined && (
+        <div className="scan-progress">
+          <span>
+            {scan.done} / {scan.total}
+          </span>
+          <span className="scan-bar">
+            <span
+              style={{ width: `${scan.total === 0 ? 0 : (scan.done / scan.total) * 100}%` }}
+            />
+          </span>
+          {scan.stoppedReason !== undefined && (
+            <span className="scan-stopped">
+              {scan.stoppedReason === 'cancelled' ? 'stopped' : 'disconnected'} — partial
+            </span>
+          )}
+        </div>
+      )}
 
       {frame === undefined ? (
         <p className="muted">
