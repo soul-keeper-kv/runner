@@ -1,4 +1,6 @@
+import { useState } from 'react';
 import { useLiveSessionStore } from '../../stores/live-session-store.js';
+import { containedInRegion, type ViewportRect } from '../../lib/registry-export.js';
 
 /**
  * The live browser view (blueprint section 37).
@@ -13,6 +15,10 @@ import { useLiveSessionStore } from '../../stores/live-session-store.js';
  * converting a semantic locator back into CSS in the browser. The image is
  * scaled to fit its container and every box is scaled by the same factor, so
  * the highlight lands where the element actually is at any panel width.
+ *
+ * The frame has two exclusive input modes: a click picks one element, a drag
+ * draws a region to scan. Both convert rendered coordinates to the page's
+ * viewport through the same inverse of `boxStyle`.
  */
 export function LivePreview(): JSX.Element {
   const session = useLiveSessionStore((state) => state.session);
@@ -25,11 +31,21 @@ export function LivePreview(): JSX.Element {
   const togglePicking = useLiveSessionStore((state) => state.togglePicking);
   const pickAt = useLiveSessionStore((state) => state.pickAt);
   const picked = useLiveSessionStore((state) => state.picked);
+  const selectingRegion = useLiveSessionStore((state) => state.selectingRegion);
+  const toggleRegionSelect = useLiveSessionStore((state) => state.toggleRegionSelect);
+  const region = useLiveSessionStore((state) => state.region);
+  const setRegion = useLiveSessionStore((state) => state.setRegion);
+  const clearRegion = useLiveSessionStore((state) => state.clearRegion);
   const scan = useLiveSessionStore((state) => state.scan);
   const scanned = useLiveSessionStore((state) => state.scanned);
   const scanAll = useLiveSessionStore((state) => state.scanAll);
+  const scanRegion = useLiveSessionStore((state) => state.scanRegion);
   const cancelScan = useLiveSessionStore((state) => state.cancelScan);
   const downloadRegistry = useLiveSessionStore((state) => state.downloadRegistry);
+  const error = useLiveSessionStore((state) => state.error);
+
+  /** The rectangle being dragged right now, in viewport coordinates. */
+  const [dragRect, setDragRect] = useState<ViewportRect | undefined>(undefined);
 
   if (session === undefined) {
     return (
@@ -41,6 +57,17 @@ export function LivePreview(): JSX.Element {
   }
 
   const frame = snapshot?.frame;
+  const scanning = scan?.running === true;
+
+  // Counted here rather than in the store so the labels update as the scan
+  // fills elements in, without the store recomputing on every unrelated change.
+  const inRegionCount =
+    region === undefined
+      ? 0
+      : (scanned ?? []).filter((element) => containedInRegion(element.bbox, region)).length;
+
+  /** The region as drawn, or the live drag, so the overlay tracks the pointer. */
+  const shownRegion = dragRect ?? region;
 
   return (
     <section className="panel">
@@ -54,6 +81,23 @@ export function LivePreview(): JSX.Element {
           >
             {picking ? 'Cancel pick' : 'Pick element'}
           </button>
+          {/*
+            The region is the answer to "I only need this panel": drawing one
+            scopes both the scan and the download, so a dense page does not have
+            to be scanned whole and then trimmed by hand.
+          */}
+          <button
+            type="button"
+            className={selectingRegion ? 'primary' : undefined}
+            onClick={() => toggleRegionSelect()}
+          >
+            {selectingRegion ? 'Cancel region' : region === undefined ? 'Select region' : 'Redraw region'}
+          </button>
+          {region !== undefined && !selectingRegion && (
+            <button type="button" className="link" onClick={() => clearRegion()}>
+              Clear region
+            </button>
+          )}
           <button type="button" onClick={() => toggleCandidates()}>
             {showCandidates ? 'Hide elements' : 'Show elements'}
           </button>
@@ -62,23 +106,46 @@ export function LivePreview(): JSX.Element {
             one's selectors. The cancel replaces it while it runs, because a
             scan drives a real browser and the user must be able to stop it.
           */}
-          {scan?.running === true ? (
+          {scanning ? (
             <button type="button" className="danger" onClick={() => cancelScan()}>
               Stop scan
             </button>
           ) : (
-            <button type="button" onClick={() => void scanAll()}>
-              Scan all elements
-            </button>
+            <>
+              <button type="button" onClick={() => void scanAll()}>
+                Scan all elements
+              </button>
+              {region !== undefined && (
+                <button type="button" className="primary" onClick={() => void scanRegion()}>
+                  Scan region
+                </button>
+              )}
+            </>
           )}
           <button
             type="button"
             className="secondary"
             disabled={scanned === undefined || scanned.length === 0}
-            onClick={() => downloadRegistry()}
+            onClick={() => downloadRegistry('page')}
           >
-            Download registry JSON
+            Download page JSON
           </button>
+          {/*
+            A separate button rather than a mode toggle on the one above: which
+            scope a download covers is the thing most worth being unambiguous
+            about, and a file that silently held the wrong scope is only noticed
+            after it has been handed to someone.
+          */}
+          {region !== undefined && (
+            <button
+              type="button"
+              className="secondary"
+              disabled={inRegionCount === 0}
+              onClick={() => downloadRegistry('region')}
+            >
+              Download region JSON{inRegionCount === 0 ? '' : ` (${inRegionCount})`}
+            </button>
+          )}
           <button type="button" onClick={() => refresh()}>
             Refresh
           </button>
@@ -95,6 +162,7 @@ export function LivePreview(): JSX.Element {
               style={{ width: `${scan.total === 0 ? 0 : (scan.done / scan.total) * 100}%` }}
             />
           </span>
+          {scan.scoped === true && <span className="scan-scoped">region</span>}
           {scan.stoppedReason !== undefined && (
             <span className="scan-stopped">
               {scan.stoppedReason === 'cancelled' ? 'stopped' : 'disconnected'} — partial
@@ -110,13 +178,98 @@ export function LivePreview(): JSX.Element {
       ) : (
         <>
           <div
-            className={`live-frame${picking ? ' picking' : ''}`}
+            className={`live-frame${picking ? ' picking' : ''}${
+              selectingRegion ? ' selecting' : ''
+            }`}
             style={{ aspectRatio: `${frame.width} / ${frame.height}` }}
             onClick={picking ? (event) => handlePick(event, frame, pickAt) : undefined}
+            /*
+             * The drag starts here and finishes on `window`.
+             *
+             * An earlier version used `setPointerCapture` with React's
+             * `onPointerUp` on this div. The box tracked the pointer correctly
+             * and then the region was never committed: capturing retargets the
+             * pointer stream, and the synthetic pointerup did not reach this
+             * handler, so `setRegion` was simply never called. The visible
+             * result was the worst kind — a rectangle drawn on screen, no
+             * region in the store, and every region button still absent.
+             *
+             * Listening on `window` cannot have that failure: the drag ends on
+             * whatever element the pointer is over, including none of ours, and
+             * a release outside the panel still completes the region.
+             */
+            onPointerDown={
+              selectingRegion
+                ? (event) => {
+                    /*
+                     * The frame's rect is measured once, here, and reused for
+                     * every event in this drag.
+                     *
+                     * Re-reading it per event is what broke the first version:
+                     * this panel scrolls, `getBoundingClientRect()` is relative
+                     * to the viewport, and a rect re-read mid-drag describes the
+                     * element at a different scroll offset than the one the
+                     * pointer coordinates were produced against. A 98%-wide drag
+                     * came out as a 25×14 region pinned at the origin — small
+                     * enough to contain nothing, which then read as "the region
+                     * scan finds no elements" rather than as a coordinate bug.
+                     *
+                     * One rect for the whole gesture is also simply correct: a
+                     * drag is measured against where the frame was when it
+                     * started.
+                     */
+                    /*
+                     * Stops the browser starting a native image drag.
+                     *
+                     * Without this the frame's <img> begins an HTML5 drag on
+                     * pointerdown, and a native drag *takes over the pointer
+                     * stream*: the following pointermove and pointerup events
+                     * never arrive. The region then stayed frozen at the
+                     * zero-size rect pointerdown created — a 98% drag produced
+                     * a 26×14 region containing nothing, which surfaced as "no
+                     * elements sit inside that region" and looked like a
+                     * containment-rule problem rather than a lost gesture.
+                     * `draggable={false}` on the image is the other half.
+                     */
+                    event.preventDefault();
+
+                    const rect = event.currentTarget.getBoundingClientRect();
+                    const origin = pointInFrame(event.clientX, event.clientY, rect, frame);
+                    if (origin === undefined) return;
+
+                    setDragRect({ x: origin.x, y: origin.y, width: 0, height: 0 });
+
+                    const onMove = (move: PointerEvent): void => {
+                      const point = pointInFrame(move.clientX, move.clientY, rect, frame);
+                      if (point !== undefined) setDragRect(rectBetween(origin, point));
+                    };
+
+                    const onUp = (up: PointerEvent): void => {
+                      window.removeEventListener('pointermove', onMove);
+                      window.removeEventListener('pointerup', onUp);
+                      window.removeEventListener('pointercancel', onUp);
+                      setDragRect(undefined);
+
+                      const point = pointInFrame(up.clientX, up.clientY, rect, frame);
+                      if (point !== undefined) setRegion(rectBetween(origin, point));
+                    };
+
+                    window.addEventListener('pointermove', onMove);
+                    window.addEventListener('pointerup', onUp);
+                    // A cancelled pointer (a touch turning into a scroll) must
+                    // still tear the listeners down, or the next drag would
+                    // stack a second pair on the window.
+                    window.addEventListener('pointercancel', onUp);
+                  }
+                : undefined
+            }
           >
             <img
               src={`data:image/${frame.format};base64,${frame.data}`}
               alt={`Live page at ${snapshot?.url ?? 'the current URL'}`}
+              // A draggable image swallows the region gesture: see the
+              // preventDefault comment on onPointerDown above.
+              draggable={false}
             />
 
             {/*
@@ -129,7 +282,13 @@ export function LivePreview(): JSX.Element {
                 element.bbox === undefined ? null : (
                   <span
                     key={element.runtimeId}
-                    className="live-box candidate"
+                    className={`live-box candidate${
+                      // Marked while a region exists so the user can see what a
+                      // region scan would cover *before* paying for it.
+                      shownRegion !== undefined && containedInRegion(element.bbox, shownRegion)
+                        ? ' in-region'
+                        : ''
+                    }`}
                     title={`${element.tag}${element.role === undefined ? '' : ` [${element.role}]`} ${element.label ?? ''}`}
                     style={boxStyle(element.bbox, frame)}
                   />
@@ -146,6 +305,10 @@ export function LivePreview(): JSX.Element {
             {picked?.bbox !== undefined && (
               <span className="live-box picked" style={boxStyle(picked.bbox, frame)} />
             )}
+
+            {shownRegion !== undefined && (
+              <span className="live-box region" style={boxStyle(shownRegion, frame)} />
+            )}
           </div>
 
           <p className="small muted">
@@ -154,6 +317,13 @@ export function LivePreview(): JSX.Element {
               <>
                 {' · '}
                 {snapshot.candidates?.length ?? 0} of {snapshot.candidateCount} elements
+              </>
+            )}
+            {region !== undefined && (
+              <>
+                {' · '}
+                region {Math.round(region.width)}×{Math.round(region.height)}
+                {scanned !== undefined && ` · ${inRegionCount} inside`}
               </>
             )}
             {preview !== undefined && preview.matchCount > 1 && (
@@ -171,6 +341,23 @@ export function LivePreview(): JSX.Element {
       {picking && picked === undefined && (
         <p className="small muted">Click the element you mean.</p>
       )}
+
+      {selectingRegion && (
+        <p className="small muted">
+          Drag a box around the area you want. Only elements fully inside it are scanned.
+        </p>
+      )}
+
+      {/*
+        Shown here, not only in the Live Session panel.
+
+        Every refusal in the region path — a drag too small to be deliberate, a
+        download whose region contains nothing scanned — sets `error`, and it was
+        rendered two panels away in a column the user is not reading. A refusal
+        nobody sees is indistinguishable from a feature that does nothing, which
+        is exactly how this looked when the region never committed.
+      */}
+      {error !== undefined && <p className="warn">{error}</p>}
 
       {picked !== undefined && <PickedElementDetail picked={picked} />}
     </section>
@@ -254,13 +441,72 @@ function handlePick(
   frame: { width: number; height: number },
   pickAt: (x: number, y: number) => void,
 ): void {
-  const rect = event.currentTarget.getBoundingClientRect();
-  if (rect.width === 0 || rect.height === 0) return;
+  const point = toViewportPoint(event, frame);
+  if (point === undefined) return;
 
-  const fractionX = (event.clientX - rect.left) / rect.width;
-  const fractionY = (event.clientY - rect.top) / rect.height;
+  pickAt(point.x, point.y);
+}
 
-  pickAt(fractionX * frame.width, fractionY * frame.height);
+/**
+ * A pointer position as a page viewport coordinate.
+ *
+ * Shared by picking and region drawing so the two cannot disagree about where
+ * the pointer was — they read the same frame through the same scaling, and a
+ * region that interpreted coordinates differently from a pick would select
+ * elements the overlay did not highlight.
+ *
+ * Clamped to the frame: a drag captured outside the image still has to name a
+ * point on the page, and an unclamped one produces a region partly off-viewport
+ * that no element can be contained by.
+ */
+function toViewportPoint(
+  event: { clientX: number; clientY: number; currentTarget: Element },
+  frame: { width: number; height: number },
+): { x: number; y: number } | undefined {
+  return pointInFrame(
+    event.clientX,
+    event.clientY,
+    event.currentTarget.getBoundingClientRect(),
+    frame,
+  );
+}
+
+/**
+ * A client coordinate as a page viewport coordinate, against a given rect.
+ *
+ * Takes the rect rather than reading it, so a drag can measure every event
+ * against the frame as it was when the gesture began. See the comment on
+ * `onPointerDown` for what re-reading it per event did.
+ */
+function pointInFrame(
+  clientX: number,
+  clientY: number,
+  rect: { left: number; top: number; width: number; height: number },
+  frame: { width: number; height: number },
+): { x: number; y: number } | undefined {
+  if (rect.width === 0 || rect.height === 0) return undefined;
+
+  const fractionX = clamp((clientX - rect.left) / rect.width, 0, 1);
+  const fractionY = clamp((clientY - rect.top) / rect.height, 0, 1);
+
+  return { x: fractionX * frame.width, y: fractionY * frame.height };
+}
+
+/** The rectangle spanned by two points, normalized so width and height are positive. */
+function rectBetween(
+  a: { x: number; y: number },
+  b: { x: number; y: number },
+): ViewportRect {
+  return {
+    x: Math.min(a.x, b.x),
+    y: Math.min(a.y, b.y),
+    width: Math.abs(b.x - a.x),
+    height: Math.abs(b.y - a.y),
+  };
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
 }
 
 function boxStyle(

@@ -106,9 +106,21 @@ Element Registry (reads, draft-then-commit writes, revisions) behind
 `RegistryPort`, live command dispatch — the API forwards a validated command over
 `LiveCommandTransportPort` to the worker, which holds a browser per live session
 — and the live view: `state.snapshot` returns a frame plus the bounding boxes the
-workspace draws highlights from. Phases 5, 6, 9+ (auth, preconditions, picking,
-recorder, healing, AI) exist as ports and stubs that return
-`CAPABILITY_NOT_IMPLEMENTED` naming their phase.
+workspace draws highlights from.
+
+A scan can be scoped to a region the user drags on the frame. That is entirely a
+workspace concern — the region filters the boxes `state.inspect` already
+reported, so no command carries it and the worker's inspector stays
+document-rooted. Only the describe loop narrows, which is where the cost is
+(one round trip per element). `containedInRegion` requires an element to sit
+*fully* inside: an intersection test would keep every ancestor overlapping the
+rectangle — `<body>`, the page wrapper — which is the hand-editing the region
+exists to avoid. A download picks its scope independently of how the scan ran,
+and a region export records `region` and `source: 'live-session-region'` so a
+partial file cannot be mistaken for a whole-page one.
+
+Phases 5, 6, 9+ (auth, preconditions, picking, recorder, healing, AI) exist as
+ports and stubs that return `CAPABILITY_NOT_IMPLEMENTED` naming their phase.
 
 The live `browser`, `selector`, `state`, `element`, `registry`, `recording` and
 `auth` namespaces are registered.

@@ -5,9 +5,11 @@ import { LiveSocket, type LiveSocketStatus } from '../lib/live-socket.js';
 import { runnerApi, type LiveSession } from '../lib/runner-api.js';
 import {
   buildRegistryExport,
+  containedInRegion,
   downloadJson,
   filenameForUrl,
   type ScannedElement,
+  type ViewportRect,
 } from '../lib/registry-export.js';
 
 /**
@@ -69,7 +71,7 @@ export interface PickedElement {
   matchedElementId?: string;
 }
 
-/** Progress of a full-page scan, so the UI can show it and offer a cancel. */
+/** Progress of a scan, so the UI can show it and offer a cancel. */
 export interface ScanProgress {
   running: boolean;
   /** Elements described so far. */
@@ -77,7 +79,12 @@ export interface ScanProgress {
   total: number;
   /** Set when the scan stopped early; the partial result is still usable. */
   stoppedReason?: 'cancelled' | 'disconnected';
+  /** Set when the scan covered a drawn region rather than the whole page. */
+  scoped?: boolean;
 }
+
+/** What a download covers. */
+export type ExportScope = 'page' | 'region';
 
 interface LiveSessionState {
   session: LiveSession | undefined;
@@ -88,6 +95,10 @@ interface LiveSessionState {
   showCandidates: boolean;
   picking: boolean;
   picked: PickedElement | undefined;
+  /** True while the frame is armed for a region drag. */
+  selectingRegion: boolean;
+  /** The region the user drew, in page viewport coordinates. */
+  region: ViewportRect | undefined;
   scan: ScanProgress | undefined;
   scanned: ScannedElement[] | undefined;
   error: string | undefined;
@@ -103,10 +114,17 @@ interface LiveSessionState {
   togglePicking(): void;
   /** Sends a click on the frame as a point in the page's viewport. */
   pickAt(x: number, y: number): void;
+  /** Arms or disarms the frame for drawing a region. */
+  toggleRegionSelect(): void;
+  /** Records a region the user drew, in page viewport coordinates. */
+  setRegion(region: ViewportRect): void;
+  clearRegion(): void;
   /** Lists every element on the page, then describes each to rank selectors. */
   scanAll(): Promise<void>;
+  /** Describes only the elements sitting inside the drawn region. */
+  scanRegion(): Promise<void>;
   cancelScan(): void;
-  downloadRegistry(): void;
+  downloadRegistry(scope?: ExportScope): void;
   clearLog(): void;
 }
 
@@ -128,6 +146,15 @@ let scanToken: symbol | undefined;
 /** A described element is worth waiting for, but not forever. */
 const DESCRIBE_TIMEOUT_MS = 10_000;
 
+/**
+ * Below this, in viewport pixels, a drag is treated as a stray click.
+ *
+ * A region has to be drawn over a screenshot, and a plain click on the frame
+ * produces a zero-sized rect. Accepting it would arm a scan that matches
+ * nothing and report "0 elements" as though the page were empty.
+ */
+const MIN_REGION_SIZE = 8;
+
 /** Bounded so a long session cannot grow the log without limit. */
 const MAX_LOG_ENTRIES = 200;
 
@@ -140,6 +167,8 @@ export const useLiveSessionStore = create<LiveSessionState>((set, get) => ({
   showCandidates: false,
   picking: false,
   picked: undefined,
+  selectingRegion: false,
+  region: undefined,
   scan: undefined,
   scanned: undefined,
   error: undefined,
@@ -198,6 +227,8 @@ export const useLiveSessionStore = create<LiveSessionState>((set, get) => ({
       snapshot: undefined,
       scan: undefined,
       scanned: undefined,
+      selectingRegion: false,
+      region: undefined,
     });
   },
 
@@ -281,7 +312,12 @@ export const useLiveSessionStore = create<LiveSessionState>((set, get) => ({
   togglePicking() {
     const { session, picking } = get();
     const next = !picking;
-    set({ picking: next, ...(next ? {} : { picked: undefined }) });
+    // The two frame modes are mutually exclusive: one click cannot mean both
+    // "describe this element" and "start a region here".
+    set({
+      picking: next,
+      ...(next ? { selectingRegion: false } : { picked: undefined }),
+    });
 
     if (session === undefined || socket === undefined) return;
     socket.send({
@@ -290,6 +326,46 @@ export const useLiveSessionStore = create<LiveSessionState>((set, get) => ({
       type: next ? 'element.pick.start' : 'element.pick.cancel',
       payload: {},
     });
+  },
+
+  /**
+   * Arms the frame for a region drag.
+   *
+   * Purely client-side. The region is a filter over geometry the worker has
+   * already reported, so nothing is sent: the browser does not need to know the
+   * user is drawing, and a command that told it would be a round trip buying
+   * nothing. Leaving pick mode on at the same time would make a click ambiguous,
+   * so arming one disarms the other.
+   */
+  toggleRegionSelect() {
+    const { selectingRegion } = get();
+    const next = !selectingRegion;
+
+    set({
+      selectingRegion: next,
+      ...(next ? { picking: false } : {}),
+    });
+
+    // Showing the candidate boxes is what makes a region checkable before the
+    // scan runs — the user needs to see which elements fall inside it.
+    if (next && !get().showCandidates) get().toggleCandidates();
+  },
+
+  setRegion(region: ViewportRect) {
+    // A click rather than a drag: too small to be a deliberate region, and
+    // keeping it would arm a scan over nothing.
+    if (region.width < MIN_REGION_SIZE || region.height < MIN_REGION_SIZE) {
+      set({ selectingRegion: false, error: 'Drag a larger region to scan.' });
+      return;
+    }
+
+    // Disarmed once drawn: the region stays visible and rescannable, and
+    // leaving the frame armed would make the next click erase it by accident.
+    set({ region, selectingRegion: false, error: undefined });
+  },
+
+  clearRegion() {
+    set({ region: undefined, selectingRegion: false });
   },
 
   pickAt(x: number, y: number) {
@@ -322,101 +398,25 @@ export const useLiveSessionStore = create<LiveSessionState>((set, get) => ({
    * make a cancel meaningless.
    */
   async scanAll() {
-    const { session } = get();
-    if (session === undefined || socket === undefined) {
-      set({ error: 'Start a live session before scanning.' });
+    await runScan(set, get, undefined);
+  },
+
+  /**
+   * Describes only the elements inside the drawn region.
+   *
+   * The whole page is still *listed* — one `state.inspect` is a single round
+   * trip and the overlay wants every box regardless — but the describe loop,
+   * which is the slow part at one browser round trip per element, runs only over
+   * what the region contains. That is the cost the region exists to cut.
+   */
+  async scanRegion() {
+    const { region } = get();
+    if (region === undefined) {
+      set({ error: 'Draw a region on the frame before scanning it.' });
       return;
     }
 
-    const token = Symbol('scan');
-    scanToken = token;
-    set({ scan: { running: true, done: 0, total: 0 }, error: undefined });
-
-    const listed = await sendAwaiting(session.id, 'state.inspect', {
-      includeScreenshot: false,
-      includeCandidates: true,
-    });
-
-    const snapshot = asSnapshot(listed);
-    if (snapshot === undefined) {
-      set({ scan: undefined, error: 'The page could not be listed.' });
-      return;
-    }
-
-    const candidates = snapshot.candidates ?? [];
-    const scanned: ScannedElement[] = candidates.map((candidate) => ({ ...candidate }));
-
-    // Shown before any describe runs: the overlay and the count are useful
-    // immediately, and a slow describe loop should not hold them back.
-    set({
-      scanned,
-      showCandidates: true,
-      scan: { running: true, done: 0, total: scanned.length },
-    });
-    get().refreshSnapshot();
-
-    for (const [index, element] of scanned.entries()) {
-      if (scanToken !== token) return;
-
-      if (element.bbox === undefined) {
-        set({ scan: { running: true, done: index + 1, total: scanned.length } });
-        continue;
-      }
-
-      const described = await sendAwaiting(session.id, 'element.describe', {
-        point: {
-          x: Math.round(element.bbox.x + element.bbox.width / 2),
-          y: Math.round(element.bbox.y + element.bbox.height / 2),
-        },
-      });
-
-      if (scanToken !== token) return;
-
-      if (described === undefined) {
-        // A socket that dropped mid-scan leaves the entries already described
-        // intact; reporting that beats discarding the work.
-        if (socket === undefined) {
-          set({
-            scan: {
-              running: false,
-              done: index,
-              total: scanned.length,
-              stoppedReason: 'disconnected',
-            },
-          });
-          return;
-        }
-      } else {
-        const picked = asPicked(described);
-        if (picked !== undefined) {
-          scanned[index] = {
-            ...element,
-            described: {
-              runtimeId: picked.runtimeId,
-              // Carried so the export can tell whether the describe landed on
-              // this element or on something covering it. The ids cannot answer
-              // that — inspect and describe number elements independently.
-              ...(picked.bbox === undefined ? {} : { bbox: picked.bbox }),
-              ...(picked.accessibleName === undefined
-                ? {}
-                : { accessibleName: picked.accessibleName }),
-              ...(picked.text === undefined ? {} : { text: picked.text }),
-              ...(picked.matchedElementId === undefined
-                ? {}
-                : { matchedElementId: picked.matchedElementId }),
-              candidateSelectors: picked.candidateSelectors,
-            },
-          };
-        }
-      }
-
-      set({
-        scanned: [...scanned],
-        scan: { running: true, done: index + 1, total: scanned.length },
-      });
-    }
-
-    set({ scan: { running: false, done: scanned.length, total: scanned.length } });
+    await runScan(set, get, region);
   },
 
   cancelScan() {
@@ -426,23 +426,51 @@ export const useLiveSessionStore = create<LiveSessionState>((set, get) => ({
     set({ scan: { ...current, running: false, stoppedReason: 'cancelled' } });
   },
 
-  downloadRegistry() {
-    const { scanned, snapshot } = get();
+  /**
+   * Downloads a registry draft for the whole page or for the region only.
+   *
+   * The scope is chosen at download time rather than fixed by how the scan ran,
+   * because the two are independent: a full scan followed by a region download
+   * is the common case — scan once, then export the one panel you came for,
+   * without paying for a second scan.
+   */
+  downloadRegistry(scope: ExportScope = 'page') {
+    const { scanned, snapshot, region } = get();
     if (scanned === undefined || scanned.length === 0) {
       set({ error: 'Scan the page before downloading a registry draft.' });
       return;
     }
 
+    if (scope === 'region' && region === undefined) {
+      set({ error: 'Draw a region before downloading one.' });
+      return;
+    }
+
+    const elements =
+      scope === 'region' && region !== undefined
+        ? scanned.filter((element) => containedInRegion(element.bbox, region))
+        : scanned;
+
+    if (elements.length === 0) {
+      // Refused rather than written: a file claiming to be a registry draft
+      // with no elements looks like a broken scan, and the user would take it
+      // to mean the region held nothing describable rather than that they
+      // drew it around nothing.
+      set({ error: 'No scanned elements sit inside that region.' });
+      return;
+    }
+
     const url = snapshot?.url ?? '';
     downloadJson(
-      buildRegistryExport(scanned, {
+      buildRegistryExport(elements, {
         url,
         ...(snapshot?.title === undefined ? {} : { title: snapshot.title }),
         ...(snapshot?.candidateCount === undefined
           ? {}
           : { candidateCount: snapshot.candidateCount }),
+        ...(scope === 'region' && region !== undefined ? { region } : {}),
       }),
-      filenameForUrl(url, 'registry'),
+      filenameForUrl(url, scope === 'region' ? 'region-registry' : 'registry'),
     );
   },
 
@@ -450,6 +478,168 @@ export const useLiveSessionStore = create<LiveSessionState>((set, get) => ({
     set({ log: [] });
   },
 }));
+
+/**
+ * Lists the page, then describes each element in scope.
+ *
+ * One implementation for both scans. The whole page is always *listed* —
+ * `state.inspect` is a single round trip and the overlay wants every box
+ * regardless of scope — and only the describe loop is narrowed, because that is
+ * where the cost is: one browser round trip per element, sequential.
+ *
+ * Sequential on purpose. Each describe drives a real browser through one
+ * session; firing 150 at once would queue them behind each other anyway and
+ * make a cancel meaningless.
+ *
+ * `scanned` keeps every listed element even for a region scan, with only the
+ * in-scope ones described. That is what lets a download choose its scope
+ * afterwards: the region is a filter over a full list, so scanning a region and
+ * then exporting the page yields a truthful file rather than a page export
+ * secretly missing everything outside a rectangle.
+ */
+async function runScan(
+  set: (partial: Partial<LiveSessionState>) => void,
+  get: () => LiveSessionState,
+  region: ViewportRect | undefined,
+): Promise<void> {
+  const { session } = get();
+  if (session === undefined || socket === undefined) {
+    set({ error: 'Start a live session before scanning.' });
+    return;
+  }
+
+  const scoped = region !== undefined;
+  const token = Symbol('scan');
+  scanToken = token;
+  set({
+    scan: { running: true, done: 0, total: 0, ...(scoped ? { scoped: true } : {}) },
+    error: undefined,
+  });
+
+  const listed = await sendAwaiting(session.id, 'state.inspect', {
+    includeScreenshot: false,
+    includeCandidates: true,
+  });
+
+  if (scanToken !== token) return;
+
+  const snapshot = asSnapshot(listed);
+  if (snapshot === undefined) {
+    set({ scan: undefined, error: 'The page could not be listed.' });
+    return;
+  }
+
+  const candidates = snapshot.candidates ?? [];
+  const scanned: ScannedElement[] = candidates.map((candidate) => ({ ...candidate }));
+
+  // The indices this scan will describe. Held as indices rather than a filtered
+  // copy so progress and results write back into the full list by position.
+  const targets = scanned
+    .map((element, index) => ({ element, index }))
+    .filter(({ element }) =>
+      region === undefined
+        ? element.bbox !== undefined
+        : containedInRegion(element.bbox, region),
+    );
+
+  if (scoped && targets.length === 0) {
+    // Named rather than reported as a finished scan of nothing: the likely
+    // cause is a region drawn around an element it clips, and "0 / 0 done"
+    // would read as "this area has no elements".
+    set({
+      scanned,
+      showCandidates: true,
+      scan: { running: false, done: 0, total: 0, scoped: true },
+      error: 'No elements sit fully inside that region. Try drawing it slightly wider.',
+    });
+    return;
+  }
+
+  // Shown before any describe runs: the overlay and the count are useful
+  // immediately, and a slow describe loop should not hold them back.
+  set({
+    scanned,
+    showCandidates: true,
+    scan: { running: true, done: 0, total: targets.length, ...(scoped ? { scoped: true } : {}) },
+  });
+  get().refreshSnapshot();
+
+  for (const [position, { element, index }] of targets.entries()) {
+    if (scanToken !== token) return;
+
+    // Guarded above for both scopes: `containedInRegion` rejects a missing box,
+    // and the unscoped filter requires one.
+    const bbox = element.bbox;
+    if (bbox === undefined) continue;
+
+    const described = await sendAwaiting(session.id, 'element.describe', {
+      point: {
+        x: Math.round(bbox.x + bbox.width / 2),
+        y: Math.round(bbox.y + bbox.height / 2),
+      },
+    });
+
+    if (scanToken !== token) return;
+
+    if (described === undefined) {
+      // A socket that dropped mid-scan leaves the entries already described
+      // intact; reporting that beats discarding the work.
+      if (socket === undefined) {
+        set({
+          scan: {
+            running: false,
+            done: position,
+            total: targets.length,
+            stoppedReason: 'disconnected',
+            ...(scoped ? { scoped: true } : {}),
+          },
+        });
+        return;
+      }
+    } else {
+      const picked = asPicked(described);
+      if (picked !== undefined) {
+        scanned[index] = {
+          ...element,
+          described: {
+            runtimeId: picked.runtimeId,
+            // Carried so the export can tell whether the describe landed on
+            // this element or on something covering it. The ids cannot answer
+            // that — inspect and describe number elements independently.
+            ...(picked.bbox === undefined ? {} : { bbox: picked.bbox }),
+            ...(picked.accessibleName === undefined
+              ? {}
+              : { accessibleName: picked.accessibleName }),
+            ...(picked.text === undefined ? {} : { text: picked.text }),
+            ...(picked.matchedElementId === undefined
+              ? {}
+              : { matchedElementId: picked.matchedElementId }),
+            candidateSelectors: picked.candidateSelectors,
+          },
+        };
+      }
+    }
+
+    set({
+      scanned: [...scanned],
+      scan: {
+        running: true,
+        done: position + 1,
+        total: targets.length,
+        ...(scoped ? { scoped: true } : {}),
+      },
+    });
+  }
+
+  set({
+    scan: {
+      running: false,
+      done: targets.length,
+      total: targets.length,
+      ...(scoped ? { scoped: true } : {}),
+    },
+  });
+}
 
 /**
  * Sends a command and waits for the result that answers it.
@@ -529,7 +719,29 @@ function handleMessage(
 
         const pickedResult = asPicked(message.result.result);
 
-        if (snapshotResult !== undefined) set({ snapshot: snapshotResult });
+        if (snapshotResult !== undefined) {
+          /*
+           * A frameless result never erases a frame already on screen.
+           *
+           * `state.inspect` and `state.snapshot` return the same shape, and
+           * only the latter carries a screenshot — so an inspect landing here
+           * used to replace the snapshot wholesale and leave `frame`
+           * undefined. The preview's entire frame block is conditional on
+           * that, so a region scan made the picture, the overlay, the region
+           * and the caption all disappear at once, which looked like the scan
+           * had broken the panel rather than like a missing field.
+           *
+           * Keeping the previous frame is also the truthful choice: it is
+           * still the last picture the Runner captured of this page.
+           */
+          const previous = get().snapshot;
+          set({
+            snapshot:
+              snapshotResult.frame === undefined && previous?.frame !== undefined
+                ? { ...snapshotResult, frame: previous.frame }
+                : snapshotResult,
+          });
+        }
         else if (pickedResult !== undefined) set({ picked: pickedResult });
         else if (isPreviewResult(message.result.result)) {
           set({ lastPreview: message.result.result });

@@ -458,6 +458,52 @@ button.link {
   background: rgba(79, 142, 247, 0.16);
 }
 
+/*
+ * Region selection.
+ *
+ * The frame is armed the same way picking arms it, and the region is drawn as
+ * one more overlay box so it scales with the panel like every other box.
+ */
+.live-frame.selecting {
+  cursor: crosshair;
+  /*
+   * A region drag must not become a text selection or a browser gesture.
+   *
+   * `user-select` stops the drag highlighting the panel's text, and
+   * `touch-action: none` stops a touch drag being claimed as a scroll before
+   * any pointermove reaches the handler — the same class of failure as the
+   * native image drag that first broke this.
+   */
+  user-select: none;
+  touch-action: none;
+}
+
+.live-frame.selecting img {
+  filter: saturate(0.85) brightness(0.95);
+}
+
+.live-box.region {
+  border: 2px dashed var(--accent);
+  background: rgba(79, 142, 247, 0.1);
+}
+
+/*
+ * An element the region would scan, shown while the region is drawn or dragged.
+ *
+ * This is what makes a region checkable before the scan runs: the containment
+ * rule drops an element clipped by the edge, and seeing that while still
+ * dragging costs a redraw rather than a wrong export.
+ */
+.live-box.candidate.in-region {
+  border-color: var(--ok);
+  background: rgba(63, 185, 128, 0.16);
+}
+
+.scan-scoped {
+  color: var(--accent);
+  white-space: nowrap;
+}
+
 .picked-element {
   margin-top: 14px;
   padding: 12px;

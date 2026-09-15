@@ -48,12 +48,29 @@ export interface ExportedElement {
   described: boolean;
 }
 
+/** A rectangle in the page's viewport coordinates. */
+export interface ViewportRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
 export interface RegistryExport {
   contractVersion: 'runner.registry.draft.v1';
-  source: 'live-session' | 'inspection';
+  source: 'live-session' | 'live-session-region' | 'inspection';
   url: string;
   title?: string;
   capturedAt: string;
+  /**
+   * The region the user drew, when this export covers one part of the page.
+   *
+   * Recorded because the element count alone cannot distinguish "this page has
+   * seven elements" from "I exported seven of this page's elements". A reader
+   * who cannot tell the difference concludes the file is incomplete and rescans
+   * the whole page, which is the work the region was meant to avoid.
+   */
+  region?: ViewportRect;
   elementCount: number;
   describedCount: number;
   /**
@@ -100,7 +117,7 @@ export interface ScannedElement {
 
 export function buildRegistryExport(
   scanned: readonly ScannedElement[],
-  page: { url: string; title?: string; candidateCount?: number },
+  page: { url: string; title?: string; candidateCount?: number; region?: ViewportRect },
 ): RegistryExport {
   const usedNames = new Map<string, number>();
 
@@ -108,18 +125,24 @@ export function buildRegistryExport(
 
   // Only when the page genuinely held more than came back. Recording a
   // shortfall of zero on every export would train a reader to ignore the field.
+  //
+  // A region export is scoped by the user's own rectangle, not by the worker's
+  // candidate cap, so the shortfall is meaningless there: every element outside
+  // the region is missing *by request*, and reporting that as truncation would
+  // describe an intentional scope as data loss.
   const available = page.candidateCount;
   const truncated =
-    available !== undefined && available > elements.length
+    page.region === undefined && available !== undefined && available > elements.length
       ? { returned: elements.length, available }
       : undefined;
 
   return {
     contractVersion: 'runner.registry.draft.v1',
-    source: 'live-session',
+    source: page.region === undefined ? 'live-session' : 'live-session-region',
     url: page.url,
     ...(page.title === undefined ? {} : { title: page.title }),
     capturedAt: new Date().toISOString(),
+    ...(page.region === undefined ? {} : { region: page.region }),
     elementCount: elements.length,
     describedCount: elements.filter((element) => element.described).length,
     ...(truncated === undefined ? {} : { truncated }),
@@ -182,6 +205,37 @@ function describeLandedElsewhere(
   if (scanned === undefined || hit === undefined) return false;
 
   return overlapRatio(scanned, hit) < MIN_BBOX_OVERLAP;
+}
+
+/**
+ * Whether an element sits entirely inside the region the user drew.
+ *
+ * Containment rather than intersection, and that choice is the whole point of
+ * the feature. An intersection test keeps every ancestor that merely overlaps
+ * the rectangle — `<body>`, the page wrapper, the card the region sits in — so
+ * a region drawn around a login form still exports the containers the user was
+ * trying to exclude, and they go back to editing the file by hand.
+ *
+ * The cost is the opposite error: an element clipped by the region's edge is
+ * dropped. That one is visible and recoverable — the overlay shows what is
+ * selected before the scan runs, so the user redraws slightly wider — whereas a
+ * silently included wrapper is only discovered after generating a Page Object.
+ *
+ * An element with no geometry is excluded: it cannot be shown to be inside, and
+ * a region scan that quietly included unplaceable elements would not be scoped.
+ */
+export function containedInRegion(
+  bbox: { x: number; y: number; width: number; height: number } | undefined,
+  region: ViewportRect,
+): boolean {
+  if (bbox === undefined) return false;
+
+  return (
+    bbox.x >= region.x &&
+    bbox.y >= region.y &&
+    bbox.x + bbox.width <= region.x + region.width &&
+    bbox.y + bbox.height <= region.y + region.height
+  );
 }
 
 /**
