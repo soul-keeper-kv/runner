@@ -9,6 +9,8 @@ import type {
   ScreencastFrame,
   ScreencastOptions,
   ScreenshotOptions,
+  ScrollOptions,
+  ScrollPosition,
 } from '@runner/application';
 import type {
   ActionResult,
@@ -369,6 +371,119 @@ export class PlaywrightBrowserAdapter implements BrowserPort {
   }
 
   /**
+   * Moves the document and reports where it came to rest.
+   *
+   * A target is scrolled with Playwright's own `scrollIntoViewIfNeeded` rather
+   * than by computing an offset from a bounding box: the box would be measured
+   * here and applied a moment later, and anything that reflowed in between —
+   * a lazy image resolving, a banner collapsing — moves the element out from
+   * under the offset. Asking the engine to bring the element into view keeps
+   * the measurement and the movement in the same instant.
+   *
+   * The offset is always read back from the document afterwards, whichever form
+   * was used, because that is the only number a caller can trust: a request to
+   * scroll past the end of the page is not an error, it just stops sooner than
+   * asked, and a client told "done" with no position cannot tell the difference
+   * between that and a page that never moved.
+   */
+  async scroll(options: ScrollOptions): Promise<Result<ScrollPosition>> {
+    try {
+      await this.ensureTranspilerHelpers();
+
+      if (options.target !== undefined) {
+        const built = toLocator(this.page, options.target);
+        if (!built.ok) return built;
+
+        const first = built.value.first();
+        if ((await first.count()) === 0) {
+          return err(
+            RunnerErrors.elementNotFound(describeScopedSelector(options.target), {
+              reason: 'nothing on the page matches the element to scroll to',
+            }),
+          );
+        }
+
+        await first.scrollIntoViewIfNeeded();
+
+        // `scrollIntoViewIfNeeded` does nothing when the element is already
+        // within the viewport, which is correct for reaching it and wrong for
+        // *reading* it: a user asking to centre something expects it centred
+        // even when it is barely on screen. Only an explicit block asks for
+        // that, so the default stays as the engine's cheaper behaviour.
+        if (options.block !== undefined && options.block !== 'nearest') {
+          await first.evaluate(
+            (element: Element, block: 'start' | 'center' | 'end') => {
+              element.scrollIntoView({ block, inline: 'nearest', behavior: 'auto' });
+            },
+            options.block,
+          );
+        }
+      } else {
+        await this.page.evaluate(
+          (input: {
+            by?: { x?: number; y?: number };
+            to?: { x?: number; y?: number } | 'top' | 'bottom';
+            behavior?: 'auto' | 'smooth';
+          }) => {
+            const behavior = input.behavior ?? 'auto';
+
+            if (input.to === 'top') {
+              window.scrollTo({ left: 0, top: 0, behavior });
+              return;
+            }
+
+            if (input.to === 'bottom') {
+              // The document's own height, read in the page: a client cannot
+              // know it, and a large sentinel number would scroll to the end
+              // of *this* page while overshooting on any other.
+              window.scrollTo({
+                left: window.scrollX,
+                top: document.documentElement.scrollHeight,
+                behavior,
+              });
+              return;
+            }
+
+            if (input.to !== undefined) {
+              window.scrollTo({
+                left: input.to.x ?? window.scrollX,
+                top: input.to.y ?? window.scrollY,
+                behavior,
+              });
+              return;
+            }
+
+            window.scrollBy({
+              left: input.by?.x ?? 0,
+              top: input.by?.y ?? 0,
+              behavior,
+            });
+          },
+          {
+            ...(options.by === undefined ? {} : { by: options.by }),
+            ...(options.to === undefined ? {} : { to: options.to }),
+            ...(options.behavior === undefined ? {} : { behavior: options.behavior }),
+          },
+        );
+      }
+
+      const position = await this.page.evaluate(() => {
+        const doc = document.documentElement;
+        return {
+          x: Math.round(window.scrollX),
+          y: Math.round(window.scrollY),
+          maxX: Math.max(0, Math.round(doc.scrollWidth - window.innerWidth)),
+          maxY: Math.max(0, Math.round(doc.scrollHeight - window.innerHeight)),
+        };
+      });
+
+      return ok(position);
+    } catch (cause) {
+      return err(RunnerErrors.internal('Scroll failed.', cause));
+    }
+  }
+
+  /**
    * Reads back whichever element sits at a viewport point.
    *
    * `elementFromPoint` returns the *topmost* element, which is what a user
@@ -626,6 +741,31 @@ export class PlaywrightBrowserAdapter implements BrowserPort {
             width: event.metadata.deviceWidth ?? this.page.viewportSize()?.width ?? 0,
             height: event.metadata.deviceHeight ?? this.page.viewportSize()?.height ?? 0,
             capturedAt: new Date().toISOString(),
+            /*
+             * Forwarded so an overlay can survive a scroll it did not cause.
+             *
+             * Boxes are measured in viewport coordinates by an inspection that
+             * happened at some earlier offset. Once the page moves — a wheel, a
+             * focused input scrolling itself into view, an anchor jump — those
+             * boxes describe a viewport this frame no longer shows. The offset
+             * travels with the picture it belongs to, which is the only pairing
+             * that is certain to agree, so a client can shift the overlay by
+             * the difference instead of paying for a fresh scan.
+             *
+             * `scrollOffsetX/Y` is what the engine reports; the document's
+             * limits are not part of a frame and are read by `scroll` instead.
+             */
+            ...(event.metadata.scrollOffsetX === undefined ||
+            event.metadata.scrollOffsetY === undefined
+              ? {}
+              : {
+                  scrollOffset: {
+                    x: Math.round(event.metadata.scrollOffsetX),
+                    y: Math.round(event.metadata.scrollOffsetY),
+                    maxX: 0,
+                    maxY: 0,
+                  },
+                }),
           });
         } catch (cause) {
           this.logger.debug('Screencast frame consumer failed', {

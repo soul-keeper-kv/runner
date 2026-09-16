@@ -49,6 +49,9 @@ export function LivePreview(): JSX.Element {
   const toggleFollow = useLiveSessionStore((state) => state.toggleFollow);
   const streaming = useLiveSessionStore((state) => state.streaming);
   const toggleStream = useLiveSessionStore((state) => state.toggleStream);
+  const scrollBy = useLiveSessionStore((state) => state.scrollBy);
+  const scrollToEnd = useLiveSessionStore((state) => state.scrollToEnd);
+  const scrollToElement = useLiveSessionStore((state) => state.scrollToElement);
 
   /** The rectangle being dragged right now, in viewport coordinates. */
   const [dragRect, setDragRect] = useState<ViewportRect | undefined>(undefined);
@@ -174,6 +177,26 @@ export function LivePreview(): JSX.Element {
           >
             {following ? 'Stop following' : 'Follow page'}
           </button>
+          {/*
+            The page moves, so content below the fold can be reached at all.
+
+            Without this the frame is a window onto the top of the page and
+            nothing else: an element further down is scanned and has selectors,
+            but it cannot be seen, and clicking the frame can never reach it —
+            a click only maps to a point the viewport currently holds.
+          */}
+          <span className="segmented">
+            <button type="button" title="Scroll to the top of the page" onClick={() => scrollToEnd('top')}>
+              ↑ Top
+            </button>
+            <button
+              type="button"
+              title="Scroll to the bottom of the page"
+              onClick={() => scrollToEnd('bottom')}
+            >
+              ↓ Bottom
+            </button>
+          </span>
           <button type="button" onClick={() => refresh()}>
             Refresh
           </button>
@@ -243,6 +266,24 @@ export function LivePreview(): JSX.Element {
             }`}
             style={{ aspectRatio: `${frame.width} / ${frame.height}` }}
             onClick={picking ? (event) => handlePick(event, frame, pickAt) : undefined}
+            /*
+             * The wheel scrolls the page in the browser, not this panel.
+             *
+             * `preventDefault` is what makes it usable: without it the workspace
+             * column scrolls under the pointer as well, so the frame drifts off
+             * screen while the page inside it moves — two things scrolling at
+             * once, neither of them the one the user is looking at.
+             *
+             * The deltas are passed through as the browser reports them, in CSS
+             * pixels. Scaling them by the frame's display ratio was tempting and
+             * wrong: a wheel notch means a notch, and matching the page's own
+             * scrolling is what makes the frame feel like the page.
+             */
+            onWheel={(event) => {
+              if (event.deltaX === 0 && event.deltaY === 0) return;
+              event.preventDefault();
+              scrollBy(event.deltaX, event.deltaY);
+            }}
             /*
              * The drag starts here and finishes on `window`.
              *
@@ -396,6 +437,48 @@ export function LivePreview(): JSX.Element {
             )}
           </p>
         </>
+      )}
+
+      {/*
+        The scanned elements, each able to bring itself into view.
+
+        This is the half of scrolling that a wheel cannot replace. A scan of a
+        long page returns hundreds of elements and the overlay can only draw the
+        ones the viewport currently holds, so checking the 150th meant guessing
+        how far down it was. Naming it instead — the page resolves the selector
+        and scrolls there — is the only form that survives a reflow.
+      */}
+      {scanned !== undefined && scanned.length > 0 && (
+        <details className="scanned-list">
+          <summary>
+            {scanned.length} scanned element{scanned.length === 1 ? '' : 's'}
+          </summary>
+          <ul>
+            {scanned.map((element) => {
+              const label = element.label ?? element.tag;
+              const reachable = element.described?.candidateSelectors[0] !== undefined;
+
+              return (
+                <li key={element.runtimeId}>
+                  <button
+                    type="button"
+                    className="link"
+                    disabled={!reachable}
+                    title={
+                      reachable
+                        ? 'Scroll the page until this element is in view'
+                        : 'Not described yet — a scan generates the selector this needs'
+                    }
+                    onClick={() => scrollToElement(element)}
+                  >
+                    {element.tag}
+                    {element.role !== undefined && ` [${element.role}]`} — {label}
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        </details>
       )}
 
       {picking && picked === undefined && (

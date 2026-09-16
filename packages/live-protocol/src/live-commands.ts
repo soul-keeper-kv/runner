@@ -15,6 +15,7 @@ export const LIVE_COMMAND_TYPES = [
   'browser.back',
   'browser.forward',
   'browser.refresh',
+  'browser.scroll',
 
   // selector authoring
   'selector.preview',
@@ -109,6 +110,57 @@ export function isLiveCommandType(value: unknown): value is LiveCommandType {
 export interface BrowserNavigatePayload {
   readonly url: string;
   readonly waitUntil?: 'load' | 'domcontentloaded' | 'networkidle';
+}
+
+/**
+ * Scrolls the live page, so the part a user needs can be reached.
+ *
+ * Why this is a command at all: every box the Runner reports — `probe`,
+ * `state.snapshot`, `element.describe` — is in the *viewport's* coordinate
+ * space, and the frame is a picture of the viewport. Content below the fold is
+ * scanned and selectable but cannot be seen or pointed at, because a click on
+ * the frame only ever maps to a point the viewport currently holds. Moving the
+ * page is what brings it into that space; nothing here changes how a box is
+ * measured.
+ *
+ * Exactly one of these is used, in this order:
+ *
+ * - `to` jumps to an absolute document offset. `'bottom'` is spelled out
+ *   rather than left to the client as a large number, because the document
+ *   height is known in the page and guessing it from outside overshoots.
+ * - `target` scrolls until a named element is in view. This is the form worth
+ *   having: after a scan of 200 elements, "show me the 150th" is a question
+ *   about meaning, not about pixels, and answering it by computing an offset
+ *   from a stale bbox is how a client ends up scrolling to where an element
+ *   *was*.
+ * - `by` nudges relatively, which is what a mouse wheel produces.
+ */
+export interface BrowserScrollPayload {
+  readonly by?: { readonly x?: number; readonly y?: number };
+  readonly to?: { readonly x?: number; readonly y?: number } | 'top' | 'bottom';
+  /**
+   * An element to bring into view, named the way every other command names one.
+   *
+   * A selector rather than a raw offset keeps blueprint rule 4 intact: the
+   * client says *which element*, and the page decides where that is. A
+   * `runtimeId` is accepted for a caller holding one from the snapshot it just
+   * scanned, but it is snapshot-local and does not survive a page change.
+   */
+  readonly target?: {
+    readonly selector?: SelectorDefinition;
+    readonly runtimeId?: string;
+    /** Where the element should land. Centring it is the readable default. */
+    readonly block?: 'start' | 'center' | 'end' | 'nearest';
+  };
+  /**
+   * Smooth scrolling is *not* the default, deliberately.
+   *
+   * The command resolves when the page reports the new offset, and a smooth
+   * scroll keeps moving after that. A frame captured at resolution would then
+   * show the page mid-flight, and every box in it would be measured against an
+   * offset that no longer holds by the time the client draws them.
+   */
+  readonly behavior?: 'auto' | 'smooth';
 }
 
 export interface SelectorPreviewPayload {
@@ -297,6 +349,7 @@ export interface LiveCommandPayloadMap {
   'browser.back': Record<string, never>;
   'browser.forward': Record<string, never>;
   'browser.refresh': Record<string, never>;
+  'browser.scroll': BrowserScrollPayload;
 
   'selector.preview': SelectorPreviewPayload;
   'selector.validate': SelectorPreviewPayload;

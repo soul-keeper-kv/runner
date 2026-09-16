@@ -136,6 +136,12 @@ interface LiveSessionState {
   toggleFollow(): void;
   /** Starts or stops the worker's frame stream. */
   toggleStream(): void;
+  /** Scrolls the live page by a delta, as a wheel over the frame produces. */
+  scrollBy(dx: number, dy: number): void;
+  /** Jumps the live page to an end of the document. */
+  scrollToEnd(edge: 'top' | 'bottom'): void;
+  /** Scrolls until a scanned element is in view, naming it by selector. */
+  scrollToElement(element: ScannedElement): void;
   /** Lists every element on the page, then describes each to rank selectors. */
   scanAll(): Promise<void>;
   /** Describes only the elements sitting inside the drawn region. */
@@ -178,6 +184,14 @@ let followTimer: number | undefined;
  * the browser spends all its time screenshotting.
  */
 let snapshotInFlight = false;
+
+/**
+ * How long a scroll is given to settle before the frame is re-taken.
+ *
+ * Long enough for a page that animates its own scrolling, short enough that the
+ * picture does not visibly lag the wheel. Only used when nothing is streaming.
+ */
+const SCROLL_SETTLE_MS = 180;
 
 /**
  * How often the frame is refreshed while following.
@@ -483,6 +497,49 @@ export const useLiveSessionStore = create<LiveSessionState>((set, get) => ({
     // sets `error`, and leaving the button lit would claim a stream that is
     // not running.
     set({ streaming: next });
+  },
+
+  /*
+   * Scrolling the live page.
+   *
+   * Why this exists at all: every box the worker reports — a scan, a preview, a
+   * pick — is in *viewport* coordinates, and the frame is a picture of the
+   * viewport. An element below the fold is scanned and has selectors, but it
+   * cannot be seen, and a click on the frame can never reach it, because a
+   * click only maps to a point the viewport currently holds. Scrolling is what
+   * moves content into that space.
+   *
+   * All three send the same command and differ only in how they name the
+   * destination.
+   */
+  scrollBy(dx: number, dy: number) {
+    sendScroll({ by: { x: dx, y: dy } });
+  },
+
+  scrollToEnd(edge: 'top' | 'bottom') {
+    sendScroll({ to: edge });
+  },
+
+  /**
+   * Scrolls to a scanned element, by selector rather than by its box.
+   *
+   * The bbox is right there and using it would be wrong: it was measured at the
+   * scroll offset the scan ran at, so converting it to a document offset means
+   * adding a scroll position that has since changed. Naming the element lets
+   * the page resolve where it *is* — and it is the only form that still works
+   * after the page reflows.
+   */
+  scrollToElement(element: ScannedElement) {
+    const selector = element.described?.candidateSelectors[0]?.selector;
+    if (selector === undefined) {
+      set({
+        error:
+          'That element has no selector yet — scan it first, then it can be scrolled to.',
+      });
+      return;
+    }
+
+    sendScroll({ target: { selector, block: 'center' } });
   },
 
   toggleCandidates() {
@@ -1026,6 +1083,42 @@ function handleMessage(
       append({ kind: 'error', label: message.code, detail: message.message });
       break;
   }
+}
+
+/**
+ * Sends one `browser.scroll`, and asks for a frame once it lands.
+ *
+ * Fire-and-forget like every other frame-affecting command, with one addition:
+ * a scroll changes what the viewport shows *and* invalidates every box already
+ * on screen, so the picture has to be re-taken. While the worker is streaming
+ * that happens on its own — the page repaints and a frame arrives — so asking
+ * again would be pure waste, and the request is skipped.
+ *
+ * The delay covers a page that scrolls its own content with an animation: a
+ * frame captured immediately shows the page mid-flight, and its boxes would be
+ * measured against an offset that has already moved on.
+ */
+function sendScroll(payload: Record<string, unknown>): void {
+  const { session, streaming } = useLiveSessionStore.getState();
+  if (session === undefined || socket === undefined) {
+    useLiveSessionStore.setState({ error: 'Start a live session before scrolling.' });
+    return;
+  }
+
+  const sent = socket.send({
+    id: `cmd_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`,
+    sessionId: session.id,
+    type: 'browser.scroll',
+    payload,
+  });
+
+  if (!sent) {
+    useLiveSessionStore.setState({ error: 'The live socket is not connected.' });
+    return;
+  }
+
+  if (streaming) return;
+  window.setTimeout(() => useLiveSessionStore.getState().refreshSnapshot(), SCROLL_SETTLE_MS);
 }
 
 /** Clears the follow timer, if one is running. */

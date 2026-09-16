@@ -90,6 +90,53 @@ export interface ScreencastFrame {
   readonly width: number;
   readonly height: number;
   readonly capturedAt: string;
+  /**
+   * Where the document sat when this frame was painted.
+   *
+   * Carried because a frame and the boxes drawn over it are produced at
+   * different moments. Boxes come from an inspection in viewport coordinates;
+   * once the page scrolls, that inspection describes a viewport the frame no
+   * longer shows, and every highlight is off by the difference. A client that
+   * knows both offsets can subtract them and keep the overlay aligned without
+   * re-scanning the page — which is the expensive half.
+   *
+   * The engine reports it per frame, so it costs nothing to forward and is the
+   * only self-consistent pairing of picture and offset available.
+   */
+  readonly scrollOffset?: ScrollPosition;
+}
+
+/**
+ * A document scroll offset, in CSS pixels from the top-left of the page.
+ *
+ * `maxX`/`maxY` are the furthest the document can scroll — `scrollWidth` minus
+ * the viewport. Reported because "am I already at the bottom?" is otherwise
+ * unanswerable from outside the page, and a client that cannot tell will keep
+ * sending wheel commands that do nothing.
+ */
+export interface ScrollPosition {
+  readonly x: number;
+  readonly y: number;
+  readonly maxX: number;
+  readonly maxY: number;
+}
+
+/** How a caller asks the page to move. Exactly one of these is honoured. */
+export interface ScrollOptions {
+  /** A relative nudge, in CSS pixels. */
+  readonly by?: { readonly x?: number; readonly y?: number };
+  /** An absolute offset, or an end of the document. */
+  readonly to?: { readonly x?: number; readonly y?: number } | 'top' | 'bottom';
+  /**
+   * Scrolls until this element is in view.
+   *
+   * A selector, not an offset: the page resolves where the element is at the
+   * moment it scrolls, so a caller holding a bbox measured before the last
+   * repaint cannot scroll to a position the element has since left.
+   */
+  readonly target?: ScopedSelector;
+  readonly block?: 'start' | 'center' | 'end' | 'nearest';
+  readonly behavior?: 'auto' | 'smooth';
 }
 
 /**
@@ -110,6 +157,21 @@ export interface BrowserPort {
 
   /** Evaluates a selector without acting on it — the basis of live preview. */
   probe(selector: ScopedSelector): Promise<Result<LocatorMatchInfo>>;
+
+  /**
+   * Moves the document, and reports where it ended up.
+   *
+   * Separate from `execute` even though a step can scroll, because these are
+   * different things: a test step scrolls as part of what it asserts, while
+   * this serves a human looking at a live page. Folding them together would
+   * put a user's idle wheel movements into an execution timeline.
+   *
+   * Returning the new position rather than nothing is what makes a wheel usable
+   * from outside the page: only the document knows whether it actually moved,
+   * and a client with no answer either re-reads the page or keeps sending
+   * commands into a document already at its end.
+   */
+  scroll(options: ScrollOptions): Promise<Result<ScrollPosition>>;
 
   execute(
     action: TestAction,

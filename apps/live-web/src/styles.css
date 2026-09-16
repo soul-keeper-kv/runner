@@ -396,6 +396,17 @@ button.link {
   border: 1px solid var(--panel-border);
   border-radius: 6px;
   background: #0d0f15;
+  /*
+   * The wheel over the frame scrolls the page in the browser, and the handler
+   * calls `preventDefault`. This stops the gesture chaining to the workspace
+   * column once the live page reaches an end — without it, hitting the bottom
+   * of the page starts scrolling the panel and the frame slides out of view.
+   *
+   * Deliberately not `touch-action: none`: that belongs to `.selecting`, where
+   * a drag must not be claimed as a scroll. Setting it here unconditionally
+   * would take panning away from a touch user everywhere else.
+   */
+  overscroll-behavior: contain;
 }
 
 .live-frame img {
@@ -693,4 +704,39 @@ button.link {
   background: var(--input-bg, #12151c);
   color: inherit;
   font-size: 0.82rem;
+}
+
+/* Every scanned element, collapsed by default: a scan returns hundreds. */
+.scanned-list {
+  margin-top: 12px;
+  font-size: 12px;
+}
+
+.scanned-list summary {
+  cursor: pointer;
+  color: var(--muted);
+}
+
+.scanned-list ul {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  /* Bounded, so a long scan cannot push the frame off the screen. */
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.scanned-list li {
+  padding: 2px 0;
+  border-bottom: 1px solid var(--panel-border);
+}
+
+.scanned-list button.link {
+  text-align: left;
+  width: 100%;
+}
+
+.scanned-list button.link:disabled {
+  opacity: 0.45;
+  cursor: default;
 }

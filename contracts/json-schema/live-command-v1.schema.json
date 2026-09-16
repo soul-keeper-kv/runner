@@ -16,6 +16,7 @@
         "browser.back",
         "browser.forward",
         "browser.refresh",
+        "browser.scroll",
         "selector.preview",
         "selector.validate",
         "selector.confirm",
@@ -269,6 +270,63 @@
               "force": {
                 "type": "boolean",
                 "description": "Replays the login even when a stored session exists, for recovering after the application invalidated the session."
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "type": { "const": "browser.scroll" } }, "required": ["type"] },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "description": "Moves the live page so content outside the viewport can be seen and pointed at. Every bounding box the Runner reports is in viewport coordinates, so scrolling is what brings an element into the space a frame click can address. Exactly one of `by`, `to` or `target` is used, in the order `to`, `target`, `by`.",
+            "minProperties": 1,
+            "additionalProperties": false,
+            "properties": {
+              "by": {
+                "type": "object",
+                "description": "A relative nudge, in CSS pixels — what a mouse wheel produces.",
+                "additionalProperties": false,
+                "properties": {
+                  "x": { "type": "number" },
+                  "y": { "type": "number" }
+                }
+              },
+              "to": {
+                "description": "An absolute document offset. `bottom` is named rather than left to the client as a large number, because only the page knows the document height.",
+                "oneOf": [
+                  { "type": "string", "enum": ["top", "bottom"] },
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "x": { "type": "number", "minimum": 0 },
+                      "y": { "type": "number", "minimum": 0 }
+                    }
+                  }
+                ]
+              },
+              "target": {
+                "type": "object",
+                "description": "Scrolls until a named element is in view. The element is named, never given as an offset: the client says which element and the page decides where it is, so a stale bbox cannot scroll to where something used to be.",
+                "minProperties": 1,
+                "additionalProperties": false,
+                "properties": {
+                  "selector": { "type": "object", "required": ["type"] },
+                  "runtimeId": { "type": "string", "minLength": 1 },
+                  "block": {
+                    "type": "string",
+                    "enum": ["start", "center", "end", "nearest"]
+                  }
+                }
+              },
+              "behavior": {
+                "type": "string",
+                "enum": ["auto", "smooth"],
+                "description": "`auto` by default: the command resolves on the new offset, and a smooth scroll would still be moving then, so any frame captured at resolution would disagree with the boxes measured for it."
               }
             }
           }
